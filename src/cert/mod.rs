@@ -5,7 +5,6 @@ mod list;
 mod meta;
 mod retire;
 mod show;
-mod verify;
 
 #[derive(clap::Parser)]
 pub struct Args {
@@ -21,8 +20,6 @@ enum Command {
     List(list::Args),
     /// Show a certificate
     Show(show::Args),
-    /// Verify a certificate
-    Verify(verify::Args),
     /// Manage metadata on a certificate
     Meta(meta::Args),
     /// Retire a certificate from new issuance
@@ -37,7 +34,6 @@ pub async fn main<Ui: crate::Ui>(
         Command::Create(command) => create::main(boo, args, command).await,
         Command::List(command) => list::main(boo, args, command).await,
         Command::Show(command) => show::main(boo, args, command).await,
-        Command::Verify(command) => verify::main(boo, args, command).await,
         Command::Meta(command) => meta::main(boo, args, command).await,
         Command::Retire(command) => retire::main(boo, args, command).await,
     }

@@ -24,14 +24,12 @@ pkiboo
 │   │   List managed certificates, including their issuer relationships and
 │   │   current status.
 │   │
-│   ├── show --cert <cert> [--pem]
+│   ├── show --cert <cert> [--pem [--chain]]
 │   │   Show a certificate's subject, issuer, serial, fingerprint, validity,
 │   │   associated key, policy, and status.
-│   │   With --pem, print only the PEM-encoded public certificate.
-│   │
-│   ├── verify
-│   │   Verify the certificate and, when its key is available, confirm that
-│   │   the certificate and key correspond.
+│   │   With --pem, print only the PEM-encoded public certificate. --chain
+│   │   appends each recorded issuer through the self-signed root for use with
+│   │   external certificate tooling.
 │   │
 │   ├── meta
 │   │   Show, set, or remove metadata on a certificate.

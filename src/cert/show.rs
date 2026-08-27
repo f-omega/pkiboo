@@ -16,6 +16,10 @@ pub struct Args {
     /// Print only the PEM-encoded public certificate
     #[arg(long)]
     pem: bool,
+
+    /// Include the complete issuer chain, from this certificate through its root
+    #[arg(long, requires = "pem")]
+    chain: bool,
 }
 
 fn display_name(name: &X509NameRef) -> Result<String, Box<dyn Error>> {
@@ -39,9 +43,36 @@ pub async fn main<Ui: crate::Ui>(
         .ok_or_else(|| format!("Certificate {} not found", args.cert))?;
 
     if args.pem {
-        std::io::stdout()
-            .lock()
-            .write_all(cert.certificate.as_bytes())?;
+        let mut output = std::io::stdout().lock();
+        let mut current = cert;
+        let mut visited = std::collections::HashSet::new();
+
+        loop {
+            if !visited.insert(current.name.to_string()) {
+                return Err(
+                    format!("Certificate chain contains a cycle at {}", current.name).into(),
+                );
+            }
+
+            output.write_all(current.certificate.as_bytes())?;
+            if !current.certificate.ends_with('\n') {
+                output.write_all(b"\n")?;
+            }
+
+            if !args.chain {
+                break;
+            }
+
+            let Some(issuer) = &current.issuer else {
+                break;
+            };
+            current = db.lookup_cert(issuer).ok_or_else(|| {
+                format!(
+                    "Certificate {} names issuer {}, but that certificate is missing",
+                    current.name, issuer
+                )
+            })?;
+        }
         return Ok(());
     }
 
