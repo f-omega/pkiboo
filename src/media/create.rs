@@ -160,7 +160,7 @@ pub(crate) async fn main<Ui: crate::Ui>(
 
         transaction.add_media(Media::new(create.name.clone(), backend.id(), trusted));
 
-        let manifest = OpenManifest::new(backend.clone()).await?;
+        let manifest = OpenManifest::create(backend.clone());
         manifest.save().await?;
 
         transaction.backup(backend.clone()).await?;

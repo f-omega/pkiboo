@@ -5,13 +5,14 @@ use crate::util::Name;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 /// A manifest is something that lists all files on this media.
 #[derive(Serialize, Deserialize)]
 pub struct Manifest {
-    files: Vec<SignedFile>,
+    pub(crate) files: Vec<SignedFile>,
 }
 
 impl Manifest {
@@ -25,9 +26,9 @@ impl Manifest {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct SignedFile {
+pub(crate) struct SignedFile {
     /// Path relative to the PKI directory
-    path: PathBuf,
+    pub(crate) path: PathBuf,
 
     /// Hash of this file
     hash: MultiHash,
@@ -36,7 +37,7 @@ struct SignedFile {
     signature: crate::keypair::Signature,
 
     /// Name of the key this is testified to
-    key: Name<Key>,
+    pub(crate) key: Name<Key>,
 }
 
 impl SignedFile {
@@ -76,8 +77,39 @@ impl SignedFile {
 
 /// A manifest that is being modified from a particular media
 pub struct OpenManifest {
-    media: Arc<dyn Media>,
-    current: Manifest,
+    pub(crate) media: Arc<dyn Media>,
+    pub(crate) current: Manifest,
+}
+
+/// An error encountered while opening an existing media manifest.
+///
+/// Keeping these cases distinct lets assessment report damage to the medium
+/// without parsing the manifest or reaching through to the storage backend
+/// itself.
+#[derive(Debug)]
+pub enum OpenManifestError {
+    Missing,
+    Read(Box<dyn Error>),
+    Invalid(Box<dyn Error>),
+}
+
+impl fmt::Display for OpenManifestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => write!(f, "media manifest is missing"),
+            Self::Read(error) => write!(f, "could not read media manifest: {error}"),
+            Self::Invalid(error) => write!(f, "media manifest is invalid: {error}"),
+        }
+    }
+}
+
+impl Error for OpenManifestError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Missing => None,
+            Self::Read(error) | Self::Invalid(error) => Some(error.as_ref()),
+        }
+    }
 }
 
 impl std::ops::Deref for OpenManifest {
@@ -96,20 +128,30 @@ impl std::ops::DerefMut for OpenManifest {
 
 static MANIFEST_KEY: &'static str = "manifest.yaml";
 impl OpenManifest {
-    pub async fn new(media: Arc<dyn Media>) -> Result<Self, Box<dyn Error>> {
+    /// Open the manifest already stored on a medium.
+    ///
+    /// A missing manifest is an error. Call [`OpenManifest::create`] only when
+    /// initializing a new medium.
+    pub async fn new(media: Arc<dyn Media>) -> Result<Self, OpenManifestError> {
         match media.get(&MANIFEST_KEY.into()).await {
             Ok(Some(contents)) => {
-                let current = yaml_serde::from_slice(&contents)?;
+                let current = yaml_serde::from_slice(&contents)
+                    .map_err(|error| OpenManifestError::Invalid(error.into()))?;
                 Ok(OpenManifest {
                     media: media.clone(),
                     current,
                 })
             }
-            Ok(None) => Ok(OpenManifest {
-                media: media.clone(),
-                current: Manifest::empty(),
-            }),
-            Err(e) => Err(e),
+            Ok(None) => Err(OpenManifestError::Missing),
+            Err(error) => Err(OpenManifestError::Read(error)),
+        }
+    }
+
+    /// Create an empty in-memory manifest for a newly initialized medium.
+    pub fn create(media: Arc<dyn Media>) -> Self {
+        Self {
+            media,
+            current: Manifest::empty(),
         }
     }
 
