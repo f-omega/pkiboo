@@ -1,7 +1,7 @@
 use super::assessment::{MediaAssessment, MediaIssue, VerifiedMediaFile};
 use crate::ui::{
     ListItem, ListView, PaneStarterExt, Presenter, Property, PropertyList, PropertyListView,
-    TaskStarterExt,
+    Task, TaskStarterExt,
 };
 use futures::future::try_join_all;
 use std::error::Error;
@@ -142,10 +142,28 @@ pub async fn main<Ui: crate::Ui>(
 
     let assessment: MediaAssessment = boo
         .ui()
-        .task(format!("Assess media {}", media.label), async |_task| {
+        .task(format!("Assess media {}", media.label), async |task| {
             let backend = media.id.open_backend().await?;
-            backend.wait_for_available().await?;
-            MediaAssessment::collect(&db, &media, backend).await
+
+            // Release the backend even when waiting or assessment fails after
+            // Pkiboo mounted it. `release` only unmounts mounts owned by this
+            // backend; an existing operator-managed mount is left untouched.
+            let assessment = async {
+                backend.wait_for_available().await?;
+                MediaAssessment::collect(&db, &media, backend.clone()).await
+            }
+            .await;
+            let release = backend.release().await;
+
+            match (assessment, release) {
+                (Ok(assessment), Ok(_)) => {
+                    task.set_message(format!("Assessed and released {}", media.label))
+                        .await;
+                    Ok(assessment)
+                }
+                (Err(error), _) => Err(error),
+                (Ok(_), Err(error)) => Err(error),
+            }
         })
         .await?;
 
