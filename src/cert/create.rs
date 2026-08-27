@@ -305,6 +305,12 @@ pub async fn main<Ui: crate::Ui>(
             let issuer = db
                 .lookup_cert(name)
                 .ok_or_else(|| format!("Could not find issuing certificate {name}"))?;
+            if !issuer.is_valid_issuer()? {
+                return Err(format!(
+                    "Certificate {name} cannot issue certificates because it is retired or outside its validity period"
+                )
+                .into());
+            }
             (
                 Some(name.clone()),
                 Some(X509::from_pem(issuer.certificate.as_bytes())?),
@@ -370,6 +376,8 @@ pub async fn main<Ui: crate::Ui>(
         issuer: issuer_name,
         certificate: pem,
         created_on: chrono::Utc::now(),
+        retired_at: None,
+        retirement_reason: None,
         meta: Meta::new(),
     });
 

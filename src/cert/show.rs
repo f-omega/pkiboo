@@ -77,6 +77,16 @@ pub async fn main<Ui: crate::Ui>(
                 Property::new("SHA-256 fingerprint", fingerprint),
                 Property::new("Not before", certificate.not_before().to_string()),
                 Property::new("Not after", certificate.not_after().to_string()),
+                Property::new(
+                    "Retired at",
+                    cert.retired_at
+                        .map(|retired_at| retired_at.to_rfc3339())
+                        .unwrap_or_else(|| "active".into()),
+                ),
+                Property::new(
+                    "Retirement reason",
+                    cert.retirement_reason.as_deref().unwrap_or("none"),
+                ),
             ]))
             .display()
             .await;

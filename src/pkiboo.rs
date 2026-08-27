@@ -490,12 +490,36 @@ pub struct Cert {
 
     pub created_on: chrono::DateTime<chrono::Utc>,
 
+    /// Once set, this certificate may never be used for new issuance. The
+    /// public certificate remains stored for history and chain validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_at: Option<chrono::DateTime<chrono::Utc>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retirement_reason: Option<String>,
+
     pub meta: Meta,
+}
+
+impl Cert {
+    /// Whether this certificate is eligible to issue another certificate now.
+    /// Retirement is permanent; ordinary X.509 validity is checked as well so
+    /// callers cannot accidentally issue with an expired or not-yet-valid CA.
+    pub fn is_valid_issuer(&self) -> Result<bool, Box<dyn Error>> {
+        if self.retired_at.is_some() {
+            return Ok(false);
+        }
+
+        let certificate = openssl::x509::X509::from_pem(self.certificate.as_bytes())?;
+        let now = openssl::asn1::Asn1Time::days_from_now(0)?;
+        Ok(certificate.not_before().compare(&now)?.is_le()
+            && certificate.not_after().compare(&now)?.is_ge())
+    }
 }
 
 impl crate::ui::ListItem for Cert {
     fn column_names() -> &'static [&'static str] {
-        &["name", "key", "issuer", "created"]
+        &["name", "key", "issuer", "created", "retired"]
     }
 
     fn get_field(&self, col: usize) -> String {
@@ -508,6 +532,10 @@ impl crate::ui::ListItem for Cert {
                 .map(ToString::to_string)
                 .unwrap_or_default(),
             3 => self.created_on.to_rfc3339(),
+            4 => self
+                .retired_at
+                .map(|retired_at| retired_at.to_rfc3339())
+                .unwrap_or_default(),
             _ => String::new(),
         }
     }
