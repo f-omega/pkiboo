@@ -246,12 +246,12 @@ impl OpenManifest {
             let key = db
                 .lookup_key(&sfile.key)
                 .ok_or_else(|| ManifestFileError::UnknownSigningKey(sfile.key.clone()))?;
-            let pkey = key.load_public_key().map_err(|source| {
-                ManifestFileError::InvalidPublicKey {
-                    key: sfile.key.clone(),
-                    source,
-                }
-            })?;
+            let pkey =
+                key.load_public_key()
+                    .map_err(|source| ManifestFileError::InvalidPublicKey {
+                        key: sfile.key.clone(),
+                        source,
+                    })?;
 
             let actual_hash = MultiHash::hash(sfile.hash.kind.clone(), data.expose_secret());
             if actual_hash != sfile.hash {
@@ -261,12 +261,13 @@ impl OpenManifest {
                 });
             }
 
-            let signature_valid = sfile.verifies(&pkey).map_err(|source| {
-                ManifestFileError::SignatureCheck {
-                    key: sfile.key.clone(),
-                    source,
-                }
-            })?;
+            let signature_valid =
+                sfile
+                    .verifies(&pkey)
+                    .map_err(|source| ManifestFileError::SignatureCheck {
+                        key: sfile.key.clone(),
+                        source,
+                    })?;
 
             if signature_valid {
                 Ok(Some(data))
@@ -310,5 +311,30 @@ impl OpenManifest {
 
             Ok(())
         }
+    }
+
+    /// Replace every manifest entry for a path and overwrite the stored file.
+    ///
+    /// Repair uses this only after an assessment has shown that the expected
+    /// copy at this path is absent or invalid and another copy has been loaded
+    /// and cryptographically verified.
+    pub async fn replace_file(
+        &mut self,
+        file: PathBuf,
+        key: &crate::keypair::LoadedKey,
+        contents: secrecy::SecretBox<Vec<u8>>,
+    ) -> Result<(), Box<dyn Error>> {
+        let signed = SignedFile::sign(file.clone(), key, &contents)?;
+
+        self.media
+            .put(
+                &file.to_string_lossy().to_string(),
+                contents.expose_secret(),
+            )
+            .await?;
+
+        self.current.files.retain(|entry| entry.path != file);
+        self.current.files.push(signed);
+        Ok(())
     }
 }

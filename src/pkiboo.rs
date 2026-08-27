@@ -446,6 +446,12 @@ impl Key {
         record_verification(&mut self.verifications, media, verified_at);
     }
 
+    /// Remove stale positive evidence after a copy fails verification.
+    pub fn clear_verification(&mut self, media: &Name<Media>) {
+        self.verifications
+            .retain(|verification| &verification.media != media);
+    }
+
     pub fn key_path(&self) -> PathBuf {
         PathBuf::new()
             .join("keys")
@@ -515,6 +521,33 @@ impl Cert {
         let now = openssl::asn1::Asn1Time::days_from_now(0)?;
         Ok(certificate.not_before().compare(&now)?.is_le()
             && certificate.not_after().compare(&now)?.is_ge())
+    }
+
+    /// Classify certificate lifetime for health reporting. Retirement is a
+    /// deliberate terminal state, not a certificate-health failure.
+    pub fn validity_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<CertificateValidity, Box<dyn Error>> {
+        if self.retired_at.is_some() {
+            return Ok(CertificateValidity::Retired);
+        }
+
+        let certificate = openssl::x509::X509::from_pem(self.certificate.as_bytes())?;
+        let openssl_now = openssl::asn1::Asn1Time::from_unix(now.timestamp())?;
+        let expiry_warning = openssl::asn1::Asn1Time::from_unix(
+            (now + chrono::Duration::days(CERT_EXPIRY_WARNING_DAYS)).timestamp(),
+        )?;
+
+        if certificate.not_before().compare(&openssl_now)? == Ordering::Greater {
+            Ok(CertificateValidity::NotYetValid)
+        } else if certificate.not_after().compare(&openssl_now)? == Ordering::Less {
+            Ok(CertificateValidity::Expired)
+        } else if certificate.not_after().compare(&expiry_warning)? != Ordering::Greater {
+            Ok(CertificateValidity::ExpiringSoon)
+        } else {
+            Ok(CertificateValidity::Current)
+        }
     }
 }
 
@@ -641,6 +674,15 @@ pub const MIN_KEY_REPLICAS: usize = 2;
 
 const CERT_EXPIRY_WARNING_DAYS: i64 = 30;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CertificateValidity {
+    Retired,
+    NotYetValid,
+    Expired,
+    ExpiringSoon,
+    Current,
+}
+
 /// Severity of a durable-state health problem found in the database.
 pub enum HealthSeverity {
     Warning,
@@ -708,6 +750,10 @@ impl Split {
 
     pub fn has_all_configured_shares(&self) -> bool {
         self.distinct_backup_count() >= self.num_splits as usize
+    }
+
+    pub fn has_recovery_quorum(&self) -> bool {
+        self.distinct_backup_count() >= self.min_splits as usize
     }
 }
 
@@ -777,7 +823,7 @@ impl Db {
                     .all(|backup| self.lookup_media(&backup.media).is_some());
             let available_shares = split.distinct_backup_count();
 
-            if available_shares < split.min_splits as usize {
+            if !split.has_recovery_quorum() {
                 health.issues.push(HealthIssue::critical(
                     entity.clone(),
                     format!(
@@ -823,11 +869,6 @@ impl Db {
             }
         }
 
-        let openssl_now = openssl::asn1::Asn1Time::from_unix(now.timestamp())?;
-        let expiry_warning = openssl::asn1::Asn1Time::from_unix(
-            (now + chrono::Duration::days(CERT_EXPIRY_WARNING_DAYS)).timestamp(),
-        )?;
-
         for cert in &self.certs {
             let entity = format!("certificate {}", cert.name);
             let key_exists = self.lookup_key(&cert.key).is_some();
@@ -851,32 +892,26 @@ impl Db {
                 ));
             }
 
-            if cert.retired_at.is_some() {
-                continue;
-            }
-
-            match openssl::x509::X509::from_pem(cert.certificate.as_bytes()) {
+            match cert.validity_at(now) {
                 Err(error) => health.issues.push(HealthIssue::critical(
                     entity,
                     format!("stored certificate PEM is invalid: {error}"),
                 )),
-                Ok(certificate) => {
-                    if certificate.not_before().compare(&openssl_now)? == Ordering::Greater {
-                        health
-                            .issues
-                            .push(HealthIssue::critical(entity, "is not valid yet"));
-                    } else if certificate.not_after().compare(&openssl_now)? == Ordering::Less {
-                        health
-                            .issues
-                            .push(HealthIssue::critical(entity, "has expired"));
-                    } else if certificate.not_after().compare(&expiry_warning)?
-                        != Ordering::Greater
-                    {
-                        health.issues.push(HealthIssue::warning(
-                            entity,
-                            format!("expires within {CERT_EXPIRY_WARNING_DAYS} days"),
-                        ));
-                    } else if key_exists && issuer_exists {
+                Ok(CertificateValidity::Retired) => {}
+                Ok(CertificateValidity::NotYetValid) => health
+                    .issues
+                    .push(HealthIssue::critical(entity, "is not valid yet")),
+                Ok(CertificateValidity::Expired) => health
+                    .issues
+                    .push(HealthIssue::critical(entity, "has expired")),
+                Ok(CertificateValidity::ExpiringSoon) => {
+                    health.issues.push(HealthIssue::warning(
+                        entity,
+                        format!("expires within {CERT_EXPIRY_WARNING_DAYS} days"),
+                    ));
+                }
+                Ok(CertificateValidity::Current) => {
+                    if key_exists && issuer_exists {
                         health.healthy_active_certificates += 1;
                     }
                 }

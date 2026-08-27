@@ -140,6 +140,16 @@ impl LoadedKey {
         ));
         mf.write_file(self.key.key_path(), self, secret).await
     }
+
+    pub async fn replace_on_media(
+        &self,
+        mf: &mut crate::media::OpenManifest,
+    ) -> Result<(), Box<dyn Error>> {
+        let secret = secrecy::SecretBox::new(Box::new(
+            self.pkey.serialize_to_pem()?.expose_secret().to_vec(),
+        ));
+        mf.replace_file(self.key.key_path(), self, secret).await
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]

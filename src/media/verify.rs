@@ -1,7 +1,7 @@
 use super::assessment::{MediaAssessment, MediaIssue, VerifiedMediaFile};
 use crate::ui::{
-    ListItem, ListView, PaneStarterExt, Presenter, Property, PropertyList, PropertyListView,
-    Task, TaskStarterExt,
+    ListItem, ListView, PaneStarterExt, Presenter, Property, PropertyList, PropertyListView, Task,
+    TaskStarterExt,
 };
 use futures::future::try_join_all;
 use std::error::Error;
@@ -126,6 +126,10 @@ impl ListItem for VerifiedMediaFile {
 pub struct Args {
     #[command(flatten)]
     media: super::MediaRef,
+
+    /// Display the assessment without changing stored verification evidence
+    #[arg(long)]
+    no_store: bool,
 }
 
 pub async fn main<Ui: crate::Ui>(
@@ -133,7 +137,7 @@ pub async fn main<Ui: crate::Ui>(
     _media: &super::Args,
     args: &Args,
 ) -> Result<(), Box<dyn Error>> {
-    let db = boo.open_database()?;
+    let mut db = boo.open_database()?;
     let media_id = args.media.resolve(&db)?;
     let media = db
         .lookup_media_by_id(&media_id)
@@ -167,6 +171,37 @@ pub async fn main<Ui: crate::Ui>(
         })
         .await?;
 
+    if !args.no_store {
+        let verified_paths = assessment
+            .verified_files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<std::collections::HashSet<_>>();
+        let updates = db
+            .keys
+            .iter()
+            .filter(|key| key.backups.contains(&media.label))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut transaction = db.transaction();
+
+        for mut key in updates {
+            if verified_paths.contains(&key.key_path()) {
+                key.record_verification(media.label.clone(), assessment.checked_at);
+            } else {
+                key.clear_verification(&media.label);
+            }
+            transaction.update_key(key)?;
+        }
+    }
+
+    display_assessment(boo, assessment).await
+}
+
+pub(super) async fn display_assessment<Ui: crate::Ui>(
+    boo: &crate::PkiBoo<Ui>,
+    assessment: MediaAssessment,
+) -> Result<(), Box<dyn Error>> {
     let healthy = assessment.is_healthy();
     let issue_count = assessment.issues.len();
     let verified_count = assessment.verified_files.len();
