@@ -1,7 +1,7 @@
 use crate::pkiboo::Key;
 use crate::ui::{ListView, PaneStarterExt, Presenter, Property, PropertyList, PropertyListView};
 use crate::util::Name;
-use futures::future::try_join;
+use futures::future::try_join_all;
 use openssl::hash::{MessageDigest, hash};
 use std::error::Error;
 use std::io::Write;
@@ -69,6 +69,14 @@ pub async fn main<Ui: crate::Ui>(
         },
     );
 
-    try_join(details, copies).await?;
+    let metadata = boo.ui().pane(
+        "Metadata".into(),
+        async |pane| -> Result<(), Box<dyn Error>> {
+            pane.property_list(key.meta.properties()).display().await;
+            Ok(())
+        },
+    );
+
+    try_join_all([details, copies, metadata]).await?;
     Ok(())
 }

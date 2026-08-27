@@ -1,6 +1,7 @@
 use crate::pkiboo::Cert;
 use crate::ui::{PaneStarterExt, Presenter, Property, PropertyList, PropertyListView};
 use crate::util::Name;
+use futures::future::try_join;
 use openssl::hash::MessageDigest;
 use openssl::x509::{X509, X509NameRef};
 use std::error::Error;
@@ -57,33 +58,41 @@ pub async fn main<Ui: crate::Ui>(
         .to_hex_str()?
         .to_string();
 
-    boo.ui()
-        .pane(
-            "Certificate details".into(),
-            async |pane| -> Result<(), Box<dyn Error>> {
-                pane.property_list(PropertyList::new([
-                    Property::new("Name", cert.name.to_string()),
-                    Property::new("Key", cert.key.to_string()),
-                    Property::new(
-                        "Issuer certificate",
-                        cert.issuer
-                            .as_ref()
-                            .map(ToString::to_string)
-                            .unwrap_or_else(|| "self-signed".into()),
-                    ),
-                    Property::new("Subject", display_name(certificate.subject_name())?),
-                    Property::new("Issuer", display_name(certificate.issuer_name())?),
-                    Property::new("Serial", serial),
-                    Property::new("SHA-256 fingerprint", fingerprint),
-                    Property::new("Not before", certificate.not_before().to_string()),
-                    Property::new("Not after", certificate.not_after().to_string()),
-                ]))
-                .display()
-                .await;
-                Ok(())
-            },
-        )
-        .await?;
+    let details = boo.ui().pane(
+        "Certificate details".into(),
+        async |pane| -> Result<(), Box<dyn Error>> {
+            pane.property_list(PropertyList::new([
+                Property::new("Name", cert.name.to_string()),
+                Property::new("Key", cert.key.to_string()),
+                Property::new(
+                    "Issuer certificate",
+                    cert.issuer
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "self-signed".into()),
+                ),
+                Property::new("Subject", display_name(certificate.subject_name())?),
+                Property::new("Issuer", display_name(certificate.issuer_name())?),
+                Property::new("Serial", serial),
+                Property::new("SHA-256 fingerprint", fingerprint),
+                Property::new("Not before", certificate.not_before().to_string()),
+                Property::new("Not after", certificate.not_after().to_string()),
+            ]))
+            .display()
+            .await;
+            Ok(())
+        },
+    );
+
+    let metadata = boo.ui().pane(
+        "Metadata".into(),
+        async |pane| -> Result<(), Box<dyn Error>> {
+            pane.property_list(cert.meta.properties()).display().await;
+            Ok(())
+        },
+    );
+
+    try_join(details, metadata).await?;
 
     Ok(())
 }

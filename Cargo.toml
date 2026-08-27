@@ -19,7 +19,7 @@ procfs = "0.18.0"
 resolve-path = "0.1.0"
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
-tokio = { version = "1.53.1", features = ["bytes", "fs", "macros", "net", "process", "rt-multi-thread"] }
+tokio = { version = "1.53.1", features = ["bytes", "fs", "macros", "net", "process", "rt-multi-thread", "signal"] }
 tokio-udev = "0.10.0"
 tokio-util = "0.7.19"
 udev = { version = "0.9.3", features = ["send"] }

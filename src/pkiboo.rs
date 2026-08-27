@@ -473,6 +473,17 @@ impl Meta {
         }
     }
 
+    /// Present metadata in stable key order.
+    pub fn properties(&self) -> crate::ui::PropertyList {
+        let mut entries = self.metadata.iter().collect::<Vec<_>>();
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        crate::ui::PropertyList::new(
+            entries
+                .into_iter()
+                .map(|(key, value)| crate::ui::Property::new(key, value)),
+        )
+    }
+
     pub async fn manage<Ui: crate::ui::Ui>(&mut self, ui: &Ui, args: &MetaSetArgs) {
         match &args.command {
             MetaCommand::Remove { key } => {

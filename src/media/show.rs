@@ -1,5 +1,5 @@
 use crate::ui::{ListView, PaneStarterExt, Presenter, Property, PropertyList, PropertyListView};
-use futures::future::try_join;
+use futures::future::try_join_all;
 use std::error::Error;
 
 struct ExpectedEntity {
@@ -81,10 +81,18 @@ pub async fn main<Ui: crate::Ui>(
             },
         );
 
+        let metadata = boo.ui().pane(
+            "Metadata".into(),
+            async |pane| -> Result<(), Box<dyn Error>> {
+                pane.property_list(media.meta.properties()).display().await;
+                Ok(())
+            },
+        );
+
         // Both panes are driven concurrently. The CLI backend buffers their
         // output and flushes it in pane creation order; a graphical backend
         // can expose and populate both panes independently.
-        try_join(media_details, expected_contents).await?;
+        try_join_all([media_details, expected_contents, metadata]).await?;
     }
 
     Ok(())
