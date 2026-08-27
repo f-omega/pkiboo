@@ -42,45 +42,45 @@ backend-neutral task tree live in `src/ui/task.rs`, with the CLI backend in
 `start_task` and an associated backend-specific task handle. Starting a task
 from a UI creates a root task; starting one from a task creates its child.
 
-`Ui` extends `TaskStarter` and additionally provides:
+`Presenter` is the common structured-output capability shared by UIs and
+tasks. It presents backend-neutral property lists and tabular list models.
+Domain concepts such as media backups remain outside this trait; a Pkiboo
+extension translates those concepts into generic presentation models.
 
-- `ready`, which waits until the backend is ready;
-- `list`, which creates a backend-specific list view.
+`Ui` extends `TaskStarter` and `Presenter` and additionally provides `ready`,
+which waits until the backend is ready.
 
 A `Task` handle can:
 
 - change its status message;
 - mark itself complete;
 - mark itself failed with an error message;
-- display a list of named properties.
+- mark itself cancelled;
+- present property lists and tabular lists through `Presenter`.
 
-`UiExt` extends `TaskStarter`, rather than `Ui`, so its `task` helper works on
+`TaskStarterExt` extends `TaskStarter`, rather than `Ui`, so its `task` helper works on
 both a root UI and a running task. It creates a task, passes a cloneable handle
 into the future, and automatically marks the task complete or failed according
 to the result. This keeps lifecycle bookkeeping out of each workflow and makes
 nested operations natural.
 
-The CLI backend implements tasks with `indicatif::MultiProgress`, property
-lists with key/value output, and lists with `comfy_table`. Progress indicators
-are hidden when stderr is not a terminal.
+The CLI backend implements tasks with `indicatif::MultiProgress`, aligned
+property cards, and lists with `comfy_table`. Both root and task output is
+printed through the multi-progress renderer so it does not corrupt live bars.
 
 The CLI maintains tasks in depth-first tree order. A new child is inserted after
 its parent's existing descendant subtree and is indented according to its tree
-depth. The backend retains strong handles to completed progress bars so their
-rows remain available while later tasks redraw. Indicatif renders an ordered
-flat collection of bars; Pkiboo supplies and maintains the hierarchy.
+depth. Completed tasks are removed from the live tree and printed once above
+the remaining progress bars. Indicatif renders an ordered flat collection of
+bars; Pkiboo supplies and maintains the hierarchy.
 
 The abstraction is backend-generic, but still small. In particular:
 
 - there is no active input API; an earlier prompt design is commented out;
 - lists are output-only and contain strings rather than typed cells;
-- `property_list` is attached to a task but is synchronous and writes directly
-  to stdout in the CLI backend;
 - warnings in `cli_common` bypass `Ui` and write directly to stderr;
-- workflows cannot express cancellation, retry, or a request that is waiting
-  specifically for operator action;
-- task identity, parent/child relationships, and structured results are not
-  represented;
+- workflows cannot express retry or a request that is waiting specifically for
+  operator action;
 - presentation and interaction are not fully separated yet.
 
 The implementation also already permits multiple asynchronous tasks to exist

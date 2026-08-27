@@ -8,12 +8,7 @@ use std::any::Any;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::os::fd::AsRawFd;
-use std::{
-    collections::HashMap,
-    error::Error,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc};
 
 pub struct PkiBoo<UiBackend> {
     db_path: PathBuf,
@@ -141,8 +136,12 @@ impl Db {
         self.keys.iter().find(|n| n.name == *nm)
     }
 
-    pub fn lookup_key_by_public_key(&self, pkey: &openssl::pkey::PKey<openssl::pkey::Public>) -> Option<&Key> {
-        pkey.public_key_to_pem().ok()
+    pub fn lookup_key_by_public_key(
+        &self,
+        pkey: &openssl::pkey::PKey<openssl::pkey::Public>,
+    ) -> Option<&Key> {
+        pkey.public_key_to_pem()
+            .ok()
             .and_then(|pem| String::from_utf8(pem).ok())
             .and_then(|pem| self.keys.iter().find(|n| n.public_key == pem))
     }
@@ -301,7 +300,7 @@ pub struct Key {
 
     pub meta: Meta,
 
-    pub backups: Vec<Name<Media>>
+    pub backups: Vec<Name<Media>>,
 }
 
 impl Key {
@@ -328,8 +327,12 @@ impl Key {
             .join("private.pem")
     }
 
-    pub fn load_public_key(&self) -> Result<openssl::pkey::PKey<openssl::pkey::Public>, Box<dyn Error>> {
-        Ok(openssl::pkey::PKey::public_key_from_pem(self.public_key.as_bytes())?)
+    pub fn load_public_key(
+        &self,
+    ) -> Result<openssl::pkey::PKey<openssl::pkey::Public>, Box<dyn Error>> {
+        Ok(openssl::pkey::PKey::public_key_from_pem(
+            self.public_key.as_bytes(),
+        )?)
     }
 }
 
@@ -374,7 +377,11 @@ impl crate::ui::ListItem for Cert {
         match col {
             0 => self.name.to_string(),
             1 => self.key.to_string(),
-            2 => self.issuer.as_ref().map(ToString::to_string).unwrap_or_default(),
+            2 => self
+                .issuer
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
             3 => self.created_on.to_rfc3339(),
             _ => String::new(),
         }
@@ -554,17 +561,15 @@ pub enum MetaCommand {
 }
 
 // Traits
-#[allow(dead_code)]
 pub trait Entity: Any {
     fn kind(&self) -> &'static str;
     fn emoji(&self) -> &'static str;
     fn name(&self) -> &String;
 }
 
-#[allow(dead_code)]
 pub trait PrivateEntity: Entity {
     /// private entities can be backed up to media and should be able to tell us where they are
-    fn backups(&self) -> Vec<Name<Media>>;
+    fn backups(&self) -> &[Name<Media>];
 }
 
 impl Entity for Key {
@@ -596,8 +601,28 @@ impl Entity for Cert {
 }
 
 impl PrivateEntity for Key {
-    fn backups(&self) -> Vec<Name<Media>> {
-        self.backups.clone()
+    fn backups(&self) -> &[Name<Media>] {
+        &self.backups
+    }
+}
+
+impl Entity for Split {
+    fn kind(&self) -> &'static str {
+        "key split"
+    }
+
+    fn emoji(&self) -> &'static str {
+        "🧩"
+    }
+
+    fn name(&self) -> &String {
+        (&self.label).into()
+    }
+}
+
+impl PrivateEntity for Split {
+    fn backups(&self) -> &[Name<Media>] {
+        &self.backups
     }
 }
 
@@ -607,17 +632,22 @@ impl Db {
     fn entities(&self) -> impl Iterator<Item = &dyn Entity> {
         itertools::chain!(
             self.keys.iter().map(|x| x as &dyn Entity),
-            self.certs.iter().map(|x| x as &dyn Entity)
+            self.certs.iter().map(|x| x as &dyn Entity),
+            self.splits.iter().map(|x| x as &dyn Entity)
         )
     }
 
-    #[allow(dead_code)]
     fn private_entities(&self) -> impl Iterator<Item = &dyn PrivateEntity> {
-        itertools::chain!(self.keys.iter().map(|x| x as &dyn PrivateEntity))
+        itertools::chain!(
+            self.keys.iter().map(|x| x as &dyn PrivateEntity),
+            self.splits.iter().map(|x| x as &dyn PrivateEntity)
+        )
     }
 
-    #[allow(dead_code)]
-    fn find_media_entities(&self, media: &Name<Media>) -> impl Iterator<Item = &dyn PrivateEntity> {
+    pub(crate) fn find_media_entities(
+        &self,
+        media: &Name<Media>,
+    ) -> impl Iterator<Item = &dyn PrivateEntity> {
         self.private_entities()
             .filter(|e| e.backups().contains(media))
     }
