@@ -5,6 +5,7 @@ use itertools::Itertools;
 use resolve_path::PathResolveExt;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
+use std::cmp::Ordering;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::os::fd::AsRawFd;
@@ -637,6 +638,274 @@ pub const VERIFICATION_MAX_AGE_DAYS: i64 = 90;
 
 /// A key should retain at least two independent complete copies.
 pub const MIN_KEY_REPLICAS: usize = 2;
+
+const CERT_EXPIRY_WARNING_DAYS: i64 = 30;
+
+/// Severity of a durable-state health problem found in the database.
+pub enum HealthSeverity {
+    Warning,
+    Critical,
+}
+
+impl std::fmt::Display for HealthSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Warning => write!(f, "warning"),
+            Self::Critical => write!(f, "critical"),
+        }
+    }
+}
+
+/// One actionable health problem derived from Pkiboo's stored state.
+pub struct HealthIssue {
+    pub severity: HealthSeverity,
+    pub entity: String,
+    pub detail: String,
+}
+
+impl HealthIssue {
+    fn warning(entity: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            severity: HealthSeverity::Warning,
+            entity: entity.into(),
+            detail: detail.into(),
+        }
+    }
+
+    fn critical(entity: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            severity: HealthSeverity::Critical,
+            entity: entity.into(),
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Health of all durable entities. Live media attachment is intentionally
+/// absent because evaluating stored state must never mount or probe devices.
+pub struct DatabaseHealth {
+    pub healthy_keys: usize,
+    pub healthy_splits: usize,
+    pub active_certificates: usize,
+    pub healthy_active_certificates: usize,
+    pub issues: Vec<HealthIssue>,
+}
+
+impl Key {
+    pub fn has_required_replicas(&self) -> bool {
+        self.backups.len() >= MIN_KEY_REPLICAS
+    }
+}
+
+impl Split {
+    pub fn distinct_backup_count(&self) -> usize {
+        self.backups
+            .iter()
+            .map(|backup| backup.share)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    }
+
+    pub fn has_all_configured_shares(&self) -> bool {
+        self.distinct_backup_count() >= self.num_splits as usize
+    }
+}
+
+impl Db {
+    /// Assess recoverability, verification freshness, certificate validity,
+    /// and referential integrity using only durable database state.
+    pub fn health_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<DatabaseHealth, Box<dyn Error>> {
+        let mut health = DatabaseHealth {
+            healthy_keys: 0,
+            healthy_splits: 0,
+            active_certificates: self
+                .certs
+                .iter()
+                .filter(|cert| cert.retired_at.is_none())
+                .count(),
+            healthy_active_certificates: 0,
+            issues: Vec::new(),
+        };
+
+        for key in &self.keys {
+            let entity = format!("key {}", key.name);
+            let references_valid = key
+                .backups
+                .iter()
+                .all(|media| self.lookup_media(media).is_some());
+
+            if !key.has_required_replicas() {
+                let detail = format!(
+                    "has {} complete copies; policy requires {MIN_KEY_REPLICAS}",
+                    key.backups.len()
+                );
+                health.issues.push(if key.backups.is_empty() {
+                    HealthIssue::critical(entity.clone(), detail)
+                } else {
+                    HealthIssue::warning(entity.clone(), detail)
+                });
+            }
+
+            let verification = key.verification_status_at(now);
+            add_verification_issue(&mut health.issues, &entity, verification);
+            if key.has_required_replicas()
+                && references_valid
+                && verification == PrivateEntityVerification::Complete
+            {
+                health.healthy_keys += 1;
+            }
+
+            for media in &key.backups {
+                if self.lookup_media(media).is_none() {
+                    health.issues.push(HealthIssue::critical(
+                        entity.clone(),
+                        format!("references unknown media {media}"),
+                    ));
+                }
+            }
+        }
+
+        for split in &self.splits {
+            let entity = format!("split {}", split.label);
+            let references_valid = self.lookup_key(&split.key).is_some()
+                && split
+                    .backups
+                    .iter()
+                    .all(|backup| self.lookup_media(&backup.media).is_some());
+            let available_shares = split.distinct_backup_count();
+
+            if available_shares < split.min_splits as usize {
+                health.issues.push(HealthIssue::critical(
+                    entity.clone(),
+                    format!(
+                        "only {available_shares} distinct shares are recorded; {} are required for recovery",
+                        split.min_splits
+                    ),
+                ));
+            } else if !split.has_all_configured_shares() {
+                health.issues.push(HealthIssue::warning(
+                    entity.clone(),
+                    format!(
+                        "only {available_shares} of {} configured shares are recorded",
+                        split.num_splits
+                    ),
+                ));
+            }
+
+            let verification = split.verification_status_at(now);
+            add_verification_issue(&mut health.issues, &entity, verification);
+            if split.has_all_configured_shares()
+                && references_valid
+                && verification == PrivateEntityVerification::Complete
+            {
+                health.healthy_splits += 1;
+            }
+
+            if self.lookup_key(&split.key).is_none() {
+                health.issues.push(HealthIssue::critical(
+                    entity.clone(),
+                    format!("references unknown key {}", split.key),
+                ));
+            }
+            for backup in &split.backups {
+                if self.lookup_media(&backup.media).is_none() {
+                    health.issues.push(HealthIssue::critical(
+                        entity.clone(),
+                        format!(
+                            "share {} references unknown media {}",
+                            backup.share.0, backup.media
+                        ),
+                    ));
+                }
+            }
+        }
+
+        let openssl_now = openssl::asn1::Asn1Time::from_unix(now.timestamp())?;
+        let expiry_warning = openssl::asn1::Asn1Time::from_unix(
+            (now + chrono::Duration::days(CERT_EXPIRY_WARNING_DAYS)).timestamp(),
+        )?;
+
+        for cert in &self.certs {
+            let entity = format!("certificate {}", cert.name);
+            let key_exists = self.lookup_key(&cert.key).is_some();
+            let issuer_exists = cert
+                .issuer
+                .as_ref()
+                .is_none_or(|issuer| self.lookup_cert(issuer).is_some());
+
+            if !key_exists {
+                health.issues.push(HealthIssue::critical(
+                    entity.clone(),
+                    format!("references unknown key {}", cert.key),
+                ));
+            }
+            if let Some(issuer) = &cert.issuer
+                && !issuer_exists
+            {
+                health.issues.push(HealthIssue::critical(
+                    entity.clone(),
+                    format!("references unknown issuer {issuer}"),
+                ));
+            }
+
+            if cert.retired_at.is_some() {
+                continue;
+            }
+
+            match openssl::x509::X509::from_pem(cert.certificate.as_bytes()) {
+                Err(error) => health.issues.push(HealthIssue::critical(
+                    entity,
+                    format!("stored certificate PEM is invalid: {error}"),
+                )),
+                Ok(certificate) => {
+                    if certificate.not_before().compare(&openssl_now)? == Ordering::Greater {
+                        health
+                            .issues
+                            .push(HealthIssue::critical(entity, "is not valid yet"));
+                    } else if certificate.not_after().compare(&openssl_now)? == Ordering::Less {
+                        health
+                            .issues
+                            .push(HealthIssue::critical(entity, "has expired"));
+                    } else if certificate.not_after().compare(&expiry_warning)?
+                        != Ordering::Greater
+                    {
+                        health.issues.push(HealthIssue::warning(
+                            entity,
+                            format!("expires within {CERT_EXPIRY_WARNING_DAYS} days"),
+                        ));
+                    } else if key_exists && issuer_exists {
+                        health.healthy_active_certificates += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(health)
+    }
+}
+
+fn add_verification_issue(
+    issues: &mut Vec<HealthIssue>,
+    entity: &str,
+    status: PrivateEntityVerification,
+) {
+    match status {
+        PrivateEntityVerification::Complete => {}
+        PrivateEntityVerification::Degraded { verified, expected } => {
+            issues.push(HealthIssue::warning(
+                entity,
+                format!("only {verified} of {expected} copies or shares have fresh verification"),
+            ));
+        }
+        PrivateEntityVerification::NotVerified => issues.push(HealthIssue::critical(
+            entity,
+            "has no usable complete verification within the freshness interval",
+        )),
+    }
+}
 
 fn record_verification(
     verifications: &mut Vec<KeyCopyVerification>,
