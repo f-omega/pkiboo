@@ -7,7 +7,6 @@ use std::{
     sync::Arc,
 };
 
-#[allow(dead_code)]
 mod assessment;
 mod create;
 mod forget;
