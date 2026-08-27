@@ -101,14 +101,13 @@ pub async fn main<Ui: crate::Ui>(
             media: media.label.to_string(),
             trusted: media.trusted,
             last_verified: key
-                .verification_on(&media.label)
-                .map(|verification| verification.verified_at.to_rfc3339())
+                .last_verified_on(&media.label)
+                .map(|verified_at| verified_at.to_rfc3339())
                 .unwrap_or_else(|| "never".into()),
             verification: key
-                .verification_on(&media.label)
-                .filter(|verification| {
-                    verification.verified_at
-                        >= now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS)
+                .last_verified_on(&media.label)
+                .filter(|verified_at| {
+                    *verified_at >= now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS)
                 })
                 .map(|_| "current")
                 .unwrap_or("needed"),

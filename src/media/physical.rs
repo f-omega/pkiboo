@@ -314,19 +314,13 @@ mod tests {
 
     #[test]
     fn non_usb_fixed_disk_remains_fixed() {
-        assert_eq!(
-            classify_attachment(false, false),
-            MediaAttachment::Fixed
-        );
+        assert_eq!(classify_attachment(false, false), MediaAttachment::Fixed);
     }
 
     #[test]
     fn ambiguous_mmc_storage_remains_fixed() {
         // SDIO/MMC also includes soldered eMMC. Only the kernel's removable
         // bit should promote an MMC-family device to removable media.
-        assert_eq!(
-            classify_attachment(false, false),
-            MediaAttachment::Fixed
-        );
+        assert_eq!(classify_attachment(false, false), MediaAttachment::Fixed);
     }
 }

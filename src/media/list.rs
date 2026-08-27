@@ -9,16 +9,22 @@ pub struct Args {
     only_online: bool,
 
     #[command(flatten)]
-    list_options: crate::util::ListOptions
+    list_options: crate::util::ListOptions,
 }
 
-pub async fn main<Ui: crate::Ui>(boo: &crate::pkiboo::PkiBoo<Ui>,
-                                 _media: &super::Args,
-                                 args: &Args) -> Result<(), Box<dyn Error>> {
+pub async fn main<Ui: crate::Ui>(
+    boo: &crate::pkiboo::PkiBoo<Ui>,
+    _media: &super::Args,
+    args: &Args,
+) -> Result<(), Box<dyn Error>> {
     let db = boo.open_database()?;
 
     // TODO: only_online
 
-    boo.ui().list(db.media.clone()).with_options(&args.list_options).display().await;
+    boo.ui()
+        .list(db.media.clone())
+        .with_options(&args.list_options)
+        .display()
+        .await;
     Ok(())
 }

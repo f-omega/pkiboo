@@ -55,10 +55,8 @@ pub async fn main<Ui: crate::Ui>(
             kind: entity.kind().to_owned(),
             name: entity.name().clone(),
             last_verified: entity
-                .verifications()
-                .iter()
-                .find(|verification| verification.media == media.label)
-                .map(|verification| verification.verified_at.to_rfc3339())
+                .last_verified_on(&media.label)
+                .map(|verified_at| verified_at.to_rfc3339())
                 .unwrap_or_else(|| "never".into()),
         })
         .collect::<Vec<_>>();

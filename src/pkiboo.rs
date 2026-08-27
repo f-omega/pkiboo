@@ -164,6 +164,95 @@ impl Db {
     }
 }
 
+#[cfg(test)]
+mod verification_tests {
+    use super::*;
+
+    fn placement(share: u32, media: &str) -> SplitBackup {
+        SplitBackup {
+            share: ShareNumber(share),
+            media: Name::new(media.into()),
+        }
+    }
+
+    fn split(verifications: Vec<SplitVerification>) -> Split {
+        Split {
+            label: Name::new("test split".into()),
+            key: Name::new("test key".into()),
+            num_splits: 5,
+            min_splits: 3,
+            meta: Meta::new(),
+            backups: (1..=5)
+                .map(|share| placement(share, &format!("media {share}")))
+                .collect(),
+            verifications,
+        }
+    }
+
+    #[test]
+    fn threshold_number_of_fresh_shares_is_degraded() {
+        let now = chrono::Utc::now();
+        let split = split(vec![SplitVerification {
+            verified_at: now,
+            shares: vec![
+                placement(1, "media 1"),
+                placement(2, "media 2"),
+                placement(3, "media 3"),
+            ],
+        }]);
+
+        assert_eq!(
+            split.verification_status_at(now),
+            PrivateEntityVerification::Degraded {
+                verified: 3,
+                expected: 5
+            }
+        );
+    }
+
+    #[test]
+    fn all_shares_can_be_verified_across_fresh_sessions() {
+        let now = chrono::Utc::now();
+        let split = split(vec![
+            SplitVerification {
+                verified_at: now - chrono::Duration::days(10),
+                shares: vec![placement(1, "media 1"), placement(2, "media 2")],
+            },
+            SplitVerification {
+                verified_at: now,
+                shares: vec![
+                    placement(3, "media 3"),
+                    placement(4, "media 4"),
+                    placement(5, "media 5"),
+                ],
+            },
+        ]);
+
+        assert_eq!(
+            split.verification_status_at(now),
+            PrivateEntityVerification::Complete
+        );
+    }
+
+    #[test]
+    fn replicas_of_one_share_only_count_once() {
+        let now = chrono::Utc::now();
+        let split = split(vec![SplitVerification {
+            verified_at: now,
+            shares: vec![
+                placement(1, "media 1"),
+                placement(1, "other media"),
+                placement(2, "media 2"),
+            ],
+        }]);
+
+        assert_eq!(
+            split.verification_status_at(now),
+            PrivateEntityVerification::NotVerified
+        );
+    }
+}
+
 pub struct OpenedDb {
     db: Db,
     db_path: PathBuf,
@@ -252,10 +341,13 @@ impl<'a> DbTx<'a> {
         }
 
         for split in &mut self.splits {
-            split.backups.retain(|backup| backup != media);
+            split.backups.retain(|backup| &backup.media != media);
+            for verification in &mut split.verifications {
+                verification.shares.retain(|share| &share.media != media);
+            }
             split
                 .verifications
-                .retain(|verification| &verification.media != media);
+                .retain(|verification| !verification.shares.is_empty());
         }
     }
 
@@ -324,7 +416,7 @@ pub struct Key {
 
     /// Most recent successful verification of each complete copy.
     #[serde(default)]
-    pub verifications: Vec<PrivateEntityVerification>,
+    pub verifications: Vec<KeyCopyVerification>,
 }
 
 impl Key {
@@ -472,20 +564,42 @@ pub struct Split {
 
     pub meta: Meta,
 
-    backups: Vec<Name<Media>>,
+    pub backups: Vec<SplitBackup>,
 
     /// Most recent successful verification of each stored share.
     #[serde(default)]
-    pub verifications: Vec<PrivateEntityVerification>,
+    pub verifications: Vec<SplitVerification>,
 }
 
-/// The most recent successful verification of one private entity on one
-/// medium. Failed attempts are operational events, not evidence that an older
-/// successful verification did not occur, so they do not replace this record.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrivateEntityVerification {
+    Complete,
+    Degraded { verified: usize, expected: usize },
+    NotVerified,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
-pub struct PrivateEntityVerification {
+pub struct KeyCopyVerification {
     pub media: Name<Media>,
     pub verified_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ShareNumber(pub u32);
+
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+pub struct SplitBackup {
+    pub share: ShareNumber,
+    pub media: Name<Media>,
+}
+
+/// A split verification exists only when reconstruction with the presented
+/// numbered shares succeeded. Health is derived from the union of successful
+/// verification evidence that remains inside the freshness interval.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SplitVerification {
+    pub verified_at: chrono::DateTime<chrono::Utc>,
+    pub shares: Vec<SplitBackup>,
 }
 
 /// Successful verification remains current for one quarter. This is a policy
@@ -497,7 +611,7 @@ pub const VERIFICATION_MAX_AGE_DAYS: i64 = 90;
 pub const MIN_KEY_REPLICAS: usize = 2;
 
 fn record_verification(
-    verifications: &mut Vec<PrivateEntityVerification>,
+    verifications: &mut Vec<KeyCopyVerification>,
     media: Name<Media>,
     verified_at: chrono::DateTime<chrono::Utc>,
 ) {
@@ -507,7 +621,7 @@ fn record_verification(
     {
         existing.verified_at = verified_at;
     } else {
-        verifications.push(PrivateEntityVerification { media, verified_at });
+        verifications.push(KeyCopyVerification { media, verified_at });
     }
 }
 
@@ -647,33 +761,46 @@ pub trait Entity: Any {
     fn name(&self) -> &String;
 }
 
+/// Routine redundancy remaining after one medium stops counting toward
+/// recoverability. This is separate from verification freshness: a remaining
+/// copy may exist without having been checked recently.
+pub struct RedundancyAfterRemoval {
+    pub remaining: usize,
+    pub required: usize,
+}
+
+impl RedundancyAfterRemoval {
+    pub fn is_sufficient(&self) -> bool {
+        self.remaining >= self.required
+    }
+}
+
 pub trait PrivateEntity: Entity {
-    /// private entities can be backed up to media and should be able to tell us where they are
-    fn backups(&self) -> &[Name<Media>];
-
-    /// Most recent successful verification for each stored copy or share.
-    fn verifications(&self) -> &[PrivateEntityVerification];
-
     /// Healthy routine redundancy. For a split this deliberately means every
     /// configured share, rather than merely its emergency recovery quorum.
     fn required_replicas(&self) -> usize;
 
-    fn verification_on(&self, media: &Name<Media>) -> Option<&PrivateEntityVerification> {
-        self.verifications()
-            .iter()
-            .find(|verification| &verification.media == media)
+    fn backup_count_excluding(&self, media: &Name<Media>) -> usize;
+
+    /// Calculate the entity-specific redundancy impact of removing a medium.
+    /// Keys count complete copies; splits count distinct numbered shares, so
+    /// duplicate placements of one share cannot satisfy the share target.
+    fn redundancy_after_removing(&self, media: &Name<Media>) -> RedundancyAfterRemoval {
+        RedundancyAfterRemoval {
+            remaining: self.backup_count_excluding(media),
+            required: self.required_replicas(),
+        }
     }
 
-    /// A private entity needs verification if any complete copy or share has
-    /// never been verified, or its most recent successful check is stale.
-    /// Checking every backup is intentional; a recovery threshold describes
-    /// emergency recoverability, not acceptable routine loss.
+    fn is_backed_up_on(&self, media: &Name<Media>) -> bool;
+    fn last_verified_on(&self, media: &Name<Media>) -> Option<chrono::DateTime<chrono::Utc>>;
+    fn verification_status_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PrivateEntityVerification;
+
     fn needs_verification_at(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
-        let oldest_current = now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS);
-        self.backups().iter().any(|media| {
-            self.verification_on(media)
-                .is_none_or(|verification| verification.verified_at < oldest_current)
-        })
+        self.verification_status_at(now) != PrivateEntityVerification::Complete
     }
 
     /// Whether this entity has a recently verified copy on some medium other
@@ -682,15 +809,7 @@ pub trait PrivateEntity: Entity {
         &self,
         excluded_media: &Name<Media>,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
-        let oldest_current = now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS);
-        self.backups().iter().any(|media| {
-            media != excluded_media
-                && self
-                    .verification_on(media)
-                    .is_some_and(|verification| verification.verified_at >= oldest_current)
-        })
-    }
+    ) -> bool;
 }
 
 impl Entity for Key {
@@ -722,16 +841,57 @@ impl Entity for Cert {
 }
 
 impl PrivateEntity for Key {
-    fn backups(&self) -> &[Name<Media>] {
-        &self.backups
-    }
-
-    fn verifications(&self) -> &[PrivateEntityVerification] {
-        &self.verifications
-    }
-
     fn required_replicas(&self) -> usize {
         MIN_KEY_REPLICAS
+    }
+
+    fn backup_count_excluding(&self, media: &Name<Media>) -> usize {
+        self.backups.iter().filter(|backup| *backup != media).count()
+    }
+
+    fn is_backed_up_on(&self, media: &Name<Media>) -> bool {
+        self.backups.contains(media)
+    }
+
+    fn last_verified_on(&self, media: &Name<Media>) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.verifications
+            .iter()
+            .find(|verification| &verification.media == media)
+            .map(|verification| verification.verified_at)
+    }
+
+    fn verification_status_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PrivateEntityVerification {
+        let oldest_current = now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS);
+        let verified = self
+            .backups
+            .iter()
+            .filter(|media| {
+                self.last_verified_on(media)
+                    .is_some_and(|verified_at| verified_at >= oldest_current)
+            })
+            .count();
+        match (verified, self.backups.len()) {
+            (0, _) => PrivateEntityVerification::NotVerified,
+            (verified, expected) if verified == expected => PrivateEntityVerification::Complete,
+            (verified, expected) => PrivateEntityVerification::Degraded { verified, expected },
+        }
+    }
+
+    fn has_fresh_verification_elsewhere(
+        &self,
+        excluded_media: &Name<Media>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let oldest_current = now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS);
+        self.backups.iter().any(|media| {
+            media != excluded_media
+                && self
+                    .last_verified_on(media)
+                    .is_some_and(|verified_at| verified_at >= oldest_current)
+        })
     }
 }
 
@@ -750,16 +910,82 @@ impl Entity for Split {
 }
 
 impl PrivateEntity for Split {
-    fn backups(&self) -> &[Name<Media>] {
-        &self.backups
-    }
-
-    fn verifications(&self) -> &[PrivateEntityVerification] {
-        &self.verifications
-    }
-
     fn required_replicas(&self) -> usize {
         self.num_splits as usize
+    }
+
+    fn backup_count_excluding(&self, media: &Name<Media>) -> usize {
+        self.backups
+            .iter()
+            .filter(|backup| &backup.media != media)
+            .map(|backup| backup.share)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    }
+
+    fn is_backed_up_on(&self, media: &Name<Media>) -> bool {
+        self.backups.iter().any(|backup| &backup.media == media)
+    }
+
+    fn last_verified_on(&self, media: &Name<Media>) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.verifications
+            .iter()
+            .filter(|verification| {
+                verification
+                    .shares
+                    .iter()
+                    .any(|share| &share.media == media)
+            })
+            .map(|verification| verification.verified_at)
+            .max()
+    }
+
+    fn verification_status_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PrivateEntityVerification {
+        let oldest_current = now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS);
+        let verified = self
+            .verifications
+            .iter()
+            .filter(|verification| verification.verified_at >= oldest_current)
+            .flat_map(|verification| verification.shares.iter().map(|share| share.share))
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        let expected = self.num_splits as usize;
+
+        if verified == expected && expected != 0 {
+            PrivateEntityVerification::Complete
+        } else if verified >= self.min_splits as usize {
+            PrivateEntityVerification::Degraded { verified, expected }
+        } else {
+            PrivateEntityVerification::NotVerified
+        }
+    }
+
+    fn has_fresh_verification_elsewhere(
+        &self,
+        excluded_media: &Name<Media>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let oldest_current = now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS);
+        let shares_being_removed = self
+            .backups
+            .iter()
+            .filter(|backup| &backup.media == excluded_media)
+            .map(|backup| backup.share)
+            .collect::<std::collections::HashSet<_>>();
+
+        shares_being_removed.iter().all(|share_number| {
+            self.backups.iter().any(|backup| {
+                backup.share == *share_number
+                    && &backup.media != excluded_media
+                    && self.verifications.iter().any(|verification| {
+                        verification.verified_at >= oldest_current
+                            && verification.shares.contains(backup)
+                    })
+            })
+        })
     }
 }
 
@@ -786,6 +1012,6 @@ impl Db {
         media: &Name<Media>,
     ) -> impl Iterator<Item = &dyn PrivateEntity> {
         self.private_entities()
-            .filter(|e| e.backups().contains(media))
+            .filter(|entity| entity.is_backed_up_on(media))
     }
 }

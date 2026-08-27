@@ -6,18 +6,20 @@ pub struct Args {
     media_ref: super::MediaRef,
 
     #[command(flatten)]
-    meta: crate::pkiboo::MetaSetArgs
+    meta: crate::pkiboo::MetaSetArgs,
 }
 
-pub async fn main<Ui: crate::Ui>(boo: &crate::pkiboo::PkiBoo<Ui>,
-                                 _media: &super::Args,
-                                 args: &Args) -> Result<(), Box<dyn Error>> {
+pub async fn main<Ui: crate::Ui>(
+    boo: &crate::pkiboo::PkiBoo<Ui>,
+    _media: &super::Args,
+    args: &Args,
+) -> Result<(), Box<dyn Error>> {
     let mut db = boo.open_database()?;
     let media_id = args.media_ref.resolve(&db)?;
 
     let mut new_media = match db.lookup_media_by_id(&media_id) {
         None => panic!("Media {media_id} not found"),
-        Some(m) => m.clone()
+        Some(m) => m.clone(),
     };
 
     let mut tx = db.transaction();
@@ -26,7 +28,6 @@ pub async fn main<Ui: crate::Ui>(boo: &crate::pkiboo::PkiBoo<Ui>,
     Ok(())
 }
 
-
 #[derive(clap::Parser)]
 pub struct Rename {
     #[command(flatten)]
@@ -34,18 +35,20 @@ pub struct Rename {
 
     /// New name to assign
     #[arg(long)]
-    label: String
+    label: String,
 }
 
-pub async fn rename<Ui: crate::Ui>(boo: &crate::pkiboo::PkiBoo<Ui>,
-                                   _media: &super::Args,
-                                   args: &Rename) -> Result<(), Box<dyn Error>> {
+pub async fn rename<Ui: crate::Ui>(
+    boo: &crate::pkiboo::PkiBoo<Ui>,
+    _media: &super::Args,
+    args: &Rename,
+) -> Result<(), Box<dyn Error>> {
     let mut db = boo.open_database()?;
     let media_id = args.media_ref.resolve(&db)?;
 
     let mut new_media = match db.lookup_media_by_id(&media_id) {
         None => panic!("Media {media_id} not found"),
-        Some(m) => m.clone()
+        Some(m) => m.clone(),
     };
 
     let mut tx = db.transaction();

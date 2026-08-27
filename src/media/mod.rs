@@ -13,7 +13,6 @@ mod inspect;
 mod list;
 mod meta;
 mod repair;
-mod retire;
 mod show;
 mod sync;
 mod verify;
@@ -131,9 +130,6 @@ enum Command {
     /// Rename the medium
     Rename(meta::Rename),
 
-    /// Retire media from service
-    Retire(retire::Args),
-
     /// Forget media that should no longer count toward recoverability
     Forget(forget::Args),
 }
@@ -152,7 +148,6 @@ pub(crate) async fn main<Ui: crate::Ui>(
         Command::Repair(c) => repair::main(boo, args, c).await,
         Command::Rename(c) => meta::rename(boo, args, c).await,
         Command::Show(c) => show::main(boo, args, c).await,
-        Command::Retire(c) => retire::main(boo, args, c).await,
         Command::Forget(c) => forget::main(boo, args, c).await,
     }
 }

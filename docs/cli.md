@@ -29,9 +29,6 @@ pkiboo
 │   │   associated key, policy, and status.
 │   │   With --pem, print only the PEM-encoded public certificate.
 │   │
-│   ├── export
-│   │   Export a public certificate in PEM or DER form.
-│   │
 │   ├── verify
 │   │   Verify the certificate and, when its key is available, confirm that
 │   │   the certificate and key correspond.
@@ -126,9 +123,6 @@ pkiboo
 │   │
 │   ├── rename
 │   │   Change the friendly name of registered media.
-│   │
-│   ├── retire
-│   │   Mark media as intentionally no longer in service.
 │   │
 │   └── forget [--dry-run] [--allow-reduced-redundancy] [--force]
 │       Remove media from inventory only when every private entity it contains

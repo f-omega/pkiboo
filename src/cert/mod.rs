@@ -1,7 +1,6 @@
 use std::error::Error;
 
 mod create;
-mod export;
 mod list;
 mod meta;
 mod retire;
@@ -22,8 +21,6 @@ enum Command {
     List(list::Args),
     /// Show a certificate
     Show(show::Args),
-    /// Export a public certificate
-    Export(export::Args),
     /// Verify a certificate
     Verify(verify::Args),
     /// Manage metadata on a certificate
@@ -40,7 +37,6 @@ pub async fn main<Ui: crate::Ui>(
         Command::Create(command) => create::main(boo, args, command).await,
         Command::List(command) => list::main(boo, args, command).await,
         Command::Show(command) => show::main(boo, args, command).await,
-        Command::Export(command) => export::main(boo, args, command).await,
         Command::Verify(command) => verify::main(boo, args, command).await,
         Command::Meta(command) => meta::main(boo, args, command).await,
         Command::Retire(command) => retire::main(boo, args, command).await,
