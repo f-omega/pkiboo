@@ -438,6 +438,11 @@ impl Key {
         }
     }
 
+    pub fn remove_backup(&mut self, media: &Name<Media>) {
+        self.backups.retain(|backup| backup != media);
+        self.clear_verification(media);
+    }
+
     pub fn record_verification(
         &mut self,
         media: Name<Media>,

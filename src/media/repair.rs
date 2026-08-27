@@ -1,7 +1,7 @@
 use super::assessment::MediaAssessment;
 use super::manifest::{OpenManifest, OpenManifestError};
-use crate::ui::{TaskStarterExt, UiKeypairExt};
-use futures::future::join_all;
+use crate::ui::{Task, TaskStarterExt, UiKeypairExt};
+use futures::{StreamExt, future::join_all, stream::FuturesUnordered};
 use std::collections::HashSet;
 use std::error::Error;
 
@@ -24,7 +24,7 @@ pub async fn main<Ui: crate::Ui>(
         .ok_or_else(|| format!("Could not find media {media_id}"))?
         .clone();
 
-    let (assessment, repaired_keys) = boo
+    let assessment = boo
         .ui()
         .task(format!("Repair media {}", media.label), async |task| {
             let backend = media.id.open_backend().await?;
@@ -66,36 +66,50 @@ pub async fn main<Ui: crate::Ui>(
                 // for all known source media, so inserting one medium can
                 // satisfy several pending keys before the operator removes it.
                 let db_ref = &db;
-                let loads = join_all(keys_to_repair.into_iter().map(|key| {
+                let mut loads = FuturesUnordered::new();
+                for key in keys_to_repair {
                     let loader = task.clone();
-                    async move {
+                    loads.push(async move {
                         let result = loader
                             .load_private_key_with_source(db_ref, &key.name)
                             .await;
                         (key, result)
-                    }
-                }))
-                .await;
+                    });
+                }
 
                 let mut loaded_sources = Vec::new();
                 let mut load_errors = Vec::new();
-                for (key, result) in loads {
+                let mut interrupted = false;
+                while !loads.is_empty() {
+                    let next = tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {
+                            interrupted = true;
+                            None
+                        }
+                        result = loads.next() => result,
+                    };
+
+                    let Some((key, result)) = next else {
+                        break;
+                    };
                     match result {
                         Ok(source) => loaded_sources.push((key, source)),
                         Err(error) => load_errors.push(error.to_string()),
                     }
                 }
+                drop(loads);
 
-                if !load_errors.is_empty() {
-                    // Other loads may have succeeded before one failed. Their
-                    // media must still be released before returning the error.
-                    let _ = join_all(
-                        loaded_sources
-                            .iter()
-                            .map(|(_, source)| source.backend.release()),
+                if interrupted {
+                    task.set_message(
+                        "Interrupted; finishing repairs for keys already loaded".into(),
                     )
                     .await;
-                    return Err(load_errors.join("; ").into());
+                } else if !load_errors.is_empty() {
+                    task.set_message(format!(
+                        "{} keys could not be loaded; continuing with partial repair",
+                        load_errors.len()
+                    ))
+                    .await;
                 }
 
                 let mut loaded_keys = Vec::new();
@@ -122,23 +136,57 @@ pub async fn main<Ui: crate::Ui>(
                     return Err(error);
                 }
 
-                let mut repaired = Vec::new();
                 for (key, loaded, _) in loaded_keys {
-                    loaded.replace_on_media(&mut manifest).await?;
+                    if let Err(error) = loaded.replace_on_media(&mut manifest).await {
+                        load_errors.push(format!("Could not restore {}: {error}", key.name));
+                        continue;
+                    }
                     // Save after each restored key. If a later source cannot
                     // be supplied, repairs already completed remain durable.
-                    manifest.save().await?;
-                    repaired.push(key.name);
+                    if let Err(error) = manifest.save().await {
+                        load_errors.push(format!(
+                            "Could not save manifest after restoring {}: {error}",
+                            key.name
+                        ));
+                        continue;
+                    }
                 }
 
                 // This also materializes an empty manifest when a damaged
                 // medium currently has no expected private-key contents.
                 manifest.save().await?;
 
-                // Public database state is safe to recreate unconditionally.
-                db.backup(backend.clone()).await?;
                 let after = MediaAssessment::collect(&db, &media, backend.clone()).await?;
-                Ok::<_, Box<dyn Error>>((after, repaired))
+
+                // Repair is authoritative: anything that verifies remains a
+                // known copy, while anything still absent or invalid no longer
+                // counts as a backup on this medium. Unlike verify, repair has
+                // no --no-store mode.
+                let verified_paths = after
+                    .verified_files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .collect::<HashSet<_>>();
+                let updates = db
+                    .keys
+                    .iter()
+                    .filter(|key| key.backups.contains(&media.label))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let mut transaction = db.transaction();
+                for mut key in updates {
+                    if verified_paths.contains(&key.key_path()) {
+                        key.record_verification(media.label.clone(), after.checked_at);
+                    } else {
+                        key.remove_backup(&media.label);
+                    }
+                    transaction.update_key(key)?;
+                }
+                drop(transaction);
+
+                // Write the reconciled database, not the pre-repair view.
+                db.backup(backend.clone()).await?;
+                Ok::<_, Box<dyn Error>>(after)
             }
             .await;
 
@@ -152,26 +200,6 @@ pub async fn main<Ui: crate::Ui>(
             }
         })
         .await?;
-
-    // A restored copy has just passed the same complete assessment used by
-    // media verify, so record fresh evidence only for repaired keys that are
-    // present in the final verified-file set.
-    let verified_paths = assessment
-        .verified_files
-        .iter()
-        .map(|file| file.path.clone())
-        .collect::<HashSet<_>>();
-    let verified_at = assessment.checked_at;
-    for key_name in repaired_keys {
-        let mut key = db
-            .lookup_key(&key_name)
-            .ok_or_else(|| format!("Could not find repaired key {key_name}"))?
-            .clone();
-        if verified_paths.contains(&key.key_path()) {
-            key.record_verification(media.label.clone(), verified_at);
-            db.transaction().update_key(key)?;
-        }
-    }
 
     super::verify::display_assessment(boo, assessment).await
 }
