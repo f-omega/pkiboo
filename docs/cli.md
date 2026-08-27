@@ -15,7 +15,7 @@ pkiboo
 │   status, stale verifications, and warnings.
 │
 ├── cert
-│   ├── create [--csr <csr-file>] [--key <key>] [--by <issuer-cert>]
+│   ├── create --name <name> [--csr <csr-file>] [--key <key>] [--by <issuer-cert>]
 │   │   Create a certificate. With --by, validate and sign the request using
 │   │   the named issuer certificate. Without --by, create a self-signed root
 │   │   certificate using the identified key.
@@ -165,6 +165,8 @@ pkiboo cert create --csr <csr-file> --by <issuer-cert>
 - `--by` identifies the certificate whose private key signs the new
   certificate. If it is omitted, the new certificate is self-signed and is
   therefore a root certificate.
+- `--name` is the stable name used to identify the certificate in Pkiboo. It
+  is independent of subject fields such as the common name.
 - `--key` explicitly identifies the subject key.
 - When `--csr` is supplied without `--key`, Pkiboo identifies the managed key
   from the CSR's requested public key.

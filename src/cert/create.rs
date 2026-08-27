@@ -5,7 +5,6 @@ use crate::util::Name;
 use openssl::asn1::{Asn1Integer, Asn1Time};
 use openssl::bn::{BigNum, MsbOption};
 use openssl::hash::MessageDigest;
-use openssl::nid::Nid;
 use openssl::pkey::{Id, PKey, Private, Public};
 use openssl::x509::extension::{BasicConstraints, KeyUsage, SubjectKeyIdentifier};
 use openssl::x509::{X509, X509Req};
@@ -13,6 +12,10 @@ use std::error::Error;
 
 #[derive(clap::Parser)]
 pub struct Args {
+    /// Name used to identify the certificate in Pkiboo
+    #[arg(long)]
+    name: Name<Cert>,
+
     /// Key to sign with
     #[arg(long)]
     key: Option<Name<Key>>,
@@ -182,17 +185,6 @@ fn check_csr_policy(csr: &X509Req) -> Result<(), Box<dyn Error>> {
         return Err("CSR subject must not be empty".into());
     }
     Ok(())
-}
-
-fn certificate_name(csr: &X509Req) -> Result<Name<Cert>, Box<dyn Error>> {
-    let common_name = csr
-        .subject_name()
-        .entries_by_nid(Nid::COMMONNAME)
-        .next()
-        .ok_or("CSR subject must contain a common name")?
-        .data()
-        .to_string()?;
-    Ok(Name::new(common_name))
 }
 
 fn random_serial() -> Result<Asn1Integer, Box<dyn Error>> {
@@ -365,17 +357,15 @@ pub async fn main<Ui: crate::Ui>(
         })
         .await?;
 
-    let name = certificate_name(&csr)?;
-
-    if db.lookup_cert(&name).is_some() {
-        return Err(format!("Certificate {name} already exists").into());
+    if db.lookup_cert(&args.name).is_some() {
+        return Err(format!("Certificate {} already exists", args.name).into());
     }
 
     // The complete public PEM is safe to retain in the ordinary database.
     let pem = String::from_utf8(certificate.to_pem()?)?;
 
     db.transaction().add_cert(Cert {
-        name,
+        name: args.name.clone(),
         key: subject_key,
         issuer: issuer_name,
         certificate: pem,
