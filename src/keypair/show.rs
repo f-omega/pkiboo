@@ -1,4 +1,4 @@
-use crate::pkiboo::Key;
+use crate::pkiboo::{Key, PrivateEntity, VERIFICATION_MAX_AGE_DAYS};
 use crate::ui::{ListView, PaneStarterExt, Presenter, Property, PropertyList, PropertyListView};
 use crate::util::Name;
 use futures::future::try_join_all;
@@ -10,11 +10,12 @@ struct CompleteCopy {
     media: String,
     trusted: bool,
     last_verified: String,
+    verification: &'static str,
 }
 
 impl crate::ui::ListItem for CompleteCopy {
     fn column_names() -> &'static [&'static str] {
-        &["media", "trusted", "last verified"]
+        &["media", "trusted", "last verified", "verification"]
     }
 
     fn get_field(&self, column: usize) -> String {
@@ -22,6 +23,7 @@ impl crate::ui::ListItem for CompleteCopy {
             0 => self.media.clone(),
             1 => self.trusted.to_string(),
             2 => self.last_verified.clone(),
+            3 => self.verification.into(),
             _ => String::new(),
         }
     }
@@ -56,6 +58,7 @@ pub async fn main<Ui: crate::Ui>(
     }
 
     let public_key = key.load_public_key()?;
+    let now = chrono::Utc::now();
     let fingerprint = hash(MessageDigest::sha256(), &public_key.public_key_to_der()?)?
         .iter()
         .map(|byte| format!("{byte:02X}"))
@@ -69,6 +72,20 @@ pub async fn main<Ui: crate::Ui>(
                 Property::new("Name", key.name.to_string()),
                 Property::new("Algorithm", key.algorithm.to_string()),
                 Property::new("Fingerprint", fingerprint),
+                Property::new(
+                    "Verification",
+                    if key.backups.is_empty() {
+                        "no copies"
+                    } else if key.needs_verification_at(now) {
+                        "needed"
+                    } else {
+                        "current"
+                    },
+                ),
+                Property::new(
+                    "Verification interval",
+                    format!("{VERIFICATION_MAX_AGE_DAYS} days"),
+                ),
             ]))
             .display()
             .await;
@@ -84,11 +101,17 @@ pub async fn main<Ui: crate::Ui>(
             media: media.label.to_string(),
             trusted: media.trusted,
             last_verified: key
-                .verifications
-                .iter()
-                .find(|verification| verification.media == media.label)
+                .verification_on(&media.label)
                 .map(|verification| verification.verified_at.to_rfc3339())
                 .unwrap_or_else(|| "never".into()),
+            verification: key
+                .verification_on(&media.label)
+                .filter(|verification| {
+                    verification.verified_at
+                        >= now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS)
+                })
+                .map(|_| "current")
+                .unwrap_or("needed"),
         })
         .collect::<Vec<_>>();
     let copies = boo.ui().pane(

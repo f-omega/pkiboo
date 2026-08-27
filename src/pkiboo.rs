@@ -468,6 +468,11 @@ pub struct PrivateEntityVerification {
     pub verified_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Successful verification remains current for one quarter. This is a policy
+/// constant rather than stored state: changing the policy immediately
+/// reevaluates every private copy from its durable verification timestamp.
+pub const VERIFICATION_MAX_AGE_DAYS: i64 = 90;
+
 fn record_verification(
     verifications: &mut Vec<PrivateEntityVerification>,
     media: Name<Media>,
@@ -625,6 +630,24 @@ pub trait PrivateEntity: Entity {
 
     /// Most recent successful verification for each stored copy or share.
     fn verifications(&self) -> &[PrivateEntityVerification];
+
+    fn verification_on(&self, media: &Name<Media>) -> Option<&PrivateEntityVerification> {
+        self.verifications()
+            .iter()
+            .find(|verification| &verification.media == media)
+    }
+
+    /// A private entity needs verification if any complete copy or share has
+    /// never been verified, or its most recent successful check is stale.
+    /// Checking every backup is intentional; a recovery threshold describes
+    /// emergency recoverability, not acceptable routine loss.
+    fn needs_verification_at(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
+        let oldest_current = now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS);
+        self.backups().iter().any(|media| {
+            self.verification_on(media)
+                .is_none_or(|verification| verification.verified_at < oldest_current)
+        })
+    }
 }
 
 impl Entity for Key {
