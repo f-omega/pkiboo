@@ -68,7 +68,7 @@ pub trait UiKeypairExt: Task {
 
                             tokio::select! {
                                 _ = worker_cancel.cancelled() => {
-                                    online.set_message("Cancelled after another copy was loaded".into()).await;
+                                    online.mark_cancelled("Another copy was loaded".into()).await;
                                     Ok(None)
                                 }
                                 result = load => result,

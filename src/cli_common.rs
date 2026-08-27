@@ -89,7 +89,9 @@ impl CliTasks {
 
     fn start_task(self: &Arc<Self>, parent: Option<TaskId>, message: String) -> CliTask {
         let progress_bar = indicatif::ProgressBar::new_spinner();
-        progress_bar.set_message(message);
+        let title = message;
+        let detail = Arc::new(Mutex::new(None));
+        progress_bar.set_message(format_task_message(&title, None));
 
         // An unbounded indicatif bar does not advance on its own. Use a compact
         // rotating quadrant and explicitly drive it with a steady timer.
@@ -118,11 +120,20 @@ impl CliTasks {
             tasks: self.clone(),
             id: placement.id,
             depth: placement.depth,
+            title,
+            detail,
             progress_bar,
         }
     }
 
-    fn finish_task(&self, id: TaskId, depth: usize, symbol: &str, message: String) {
+    fn finish_task(
+        &self,
+        id: TaskId,
+        depth: usize,
+        title: &str,
+        detail: Option<&str>,
+        outcome: CliTaskOutcome,
+    ) {
         let progress_bar = {
             let mut state = self.state.lock().expect("CLI task tree lock poisoned");
 
@@ -147,9 +158,75 @@ impl CliTasks {
         // MultiProgress::println writes above the currently drawn progress
         // bars, leaving one stable history row instead of a finished bar that
         // gets rendered again as later tasks update.
-        let _ = self
-            .progress
-            .println(format!("{indent}{symbol} {message}"));
+        let _ = self.progress.println(format!(
+            "{indent}{} {}",
+            outcome.symbol(),
+            format_terminal_task(title, detail, outcome)
+        ));
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CliTaskOutcome {
+    Complete,
+    Error,
+    Cancelled,
+}
+
+impl CliTaskOutcome {
+    fn symbol(self) -> &'static str {
+        match self {
+            Self::Complete => "✅",
+            Self::Error => "❌",
+            Self::Cancelled => "⏹️",
+        }
+    }
+}
+
+fn format_task_message(title: &str, detail: Option<&str>) -> String {
+    if !std::io::stderr().is_terminal() {
+        return format_plain_task(title, detail);
+    }
+
+    let title_style = Style::new().bold();
+    let detail_style = Style::new().dimmed();
+
+    match detail {
+        Some(detail) => format!(
+            "{title_style}{title}{title_style:#}{detail_style} — {detail}{detail_style:#}"
+        ),
+        None => format!("{title_style}{title}{title_style:#}"),
+    }
+}
+
+fn format_terminal_task(
+    title: &str,
+    detail: Option<&str>,
+    outcome: CliTaskOutcome,
+) -> String {
+    if !std::io::stderr().is_terminal() {
+        return format_plain_task(title, detail);
+    }
+
+    let title_style = Style::new().bold();
+    let detail_style = match outcome {
+        CliTaskOutcome::Complete => Style::new().dimmed(),
+        CliTaskOutcome::Error => Style::new().fg_color(Some(AnsiColor::Red.into())),
+        CliTaskOutcome::Cancelled => Style::new().fg_color(Some(AnsiColor::Yellow.into())),
+    };
+
+    match detail {
+        Some(detail) => format!(
+            "{title_style}{title}{title_style:#}{detail_style} — {detail}{detail_style:#}"
+        ),
+        None => format!("{title_style}{title}{title_style:#}"),
+    }
+}
+
+fn format_plain_task(title: &str, detail: Option<&str>) -> String {
+    match detail {
+        Some(detail) => format!("{title} — {detail}"),
+        None => title.to_owned(),
     }
 }
 
@@ -158,6 +235,8 @@ pub struct CliTask {
     tasks: Arc<CliTasks>,
     id: TaskId,
     depth: usize,
+    title: String,
+    detail: Arc<Mutex<Option<String>>>,
     progress_bar: indicatif::ProgressBar,
 }
 
@@ -168,20 +247,47 @@ pub struct CliList {
 
 impl Task for CliTask {
     async fn mark_complete(&self) {
+        let detail = self
+            .detail
+            .lock()
+            .expect("CLI task detail lock poisoned")
+            .clone();
         self.tasks.finish_task(
             self.id,
             self.depth,
-            "✅",
-            self.progress_bar.message().to_string(),
+            &self.title,
+            detail.as_deref(),
+            CliTaskOutcome::Complete,
         );
     }
 
     async fn mark_error(&self, message: String) {
-        self.tasks.finish_task(self.id, self.depth, "❌", message);
+        self.tasks.finish_task(
+            self.id,
+            self.depth,
+            &self.title,
+            Some(&message),
+            CliTaskOutcome::Error,
+        );
+    }
+
+    async fn mark_cancelled(&self, message: String) {
+        self.tasks.finish_task(
+            self.id,
+            self.depth,
+            &self.title,
+            Some(&message),
+            CliTaskOutcome::Cancelled,
+        );
     }
 
     async fn set_message(&self, message: String) {
-        self.progress_bar.set_message(message);
+        *self
+            .detail
+            .lock()
+            .expect("CLI task detail lock poisoned") = Some(message.clone());
+        self.progress_bar
+            .set_message(format_task_message(&self.title, Some(&message)));
     }
 
     fn property_list(&self, props: Vec<(String, String)>) {
