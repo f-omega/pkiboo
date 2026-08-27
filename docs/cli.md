@@ -1,239 +1,207 @@
+# CLI structure
+
+Pkiboo's primary objects are certificates, keys, and media. A certificate is not
+classified as a root or intermediate by its CLI object type: its issuer
+relationship determines its place in the certificate hierarchy.
+
+Recovery splits belong to keys and are managed beneath `key split`. Remote
+storage is a media backend, not a separate object type. Locations and other
+operator-defined classifications are ordinary metadata.
+
+```text
 pkiboo
-├── init
-│   Initialize a new pkiboo repository/database and local configuration.
-│
 ├── status
-│   Show a concise health summary: roots, key recoverability, media status,
-│   stale verifications, and warnings.
+│   Show a concise health summary: certificates, key recoverability, media
+│   status, stale verifications, and warnings.
 │
-├── root
-│   ├── create
-│   │   Create a new self-signed root CA and its private key.
+├── cert
+│   ├── create [--csr <csr-file>] [--key <key>] [--by <issuer-cert>]
+│   │   Create a certificate. With --by, validate and sign the request using
+│   │   the named issuer certificate. Without --by, create a self-signed root
+│   │   certificate using the identified key.
 │   │
 │   ├── list
-│   │   List managed root CAs.
+│   │   List managed certificates, including their issuer relationships and
+│   │   current status.
 │   │
 │   ├── show
-│   │   Show one root's certificate, fingerprint, validity, key custody,
-│   │   recovery options, and issued intermediates.
+│   │   Show a certificate's subject, issuer, serial, fingerprint, validity,
+│   │   associated key, policy, and status.
 │   │
 │   ├── export
-│   │   Export the public root certificate in PEM/DER form.
+│   │   Export a public certificate in PEM or DER form.
 │   │
 │   ├── verify
-│   │   Verify the root certificate and, when available, key/cert correspondence.
+│   │   Verify the certificate and, when its key is available, confirm that
+│   │   the certificate and key correspond.
+│   │
+│   ├── meta
+│   │   Show, set, or remove metadata on a certificate.
 │   │
 │   └── retire
-│       Mark a root as no longer used for new intermediate issuance while
-│       retaining it for trust/recovery/history.
+│       Mark a certificate as unavailable for new issuance while retaining
+│       its certificate, relationships, and history.
 │
 ├── key
+│   ├── create
+│   │   Generate a new key and write it directly to explicitly selected media.
+│   │   Retain only public information and storage metadata locally.
+│   │
 │   ├── list
-│   │   List managed private keys and their recoverability state.
+│   │   List managed keys and their availability and recoverability state.
 │   │
 │   ├── show
-│   │   Show key fingerprint, owner/root, complete backups, splits, and health.
+│   │   Show a key's fingerprint, public information, complete copies,
+│   │   recovery splits, and health.
 │   │
 │   ├── backup
-│   │   Create a complete encrypted backup of a private key directly onto
-│   │   removable media, paper, or an approved remote destination.
+│   │   Make another complete copy of a key directly from its current media
+│   │   to explicitly selected destination media.
 │   │
 │   ├── split
-│   │   Create a threshold recovery split, e.g. 3-of-5, and interactively
-│   │   place each share onto a distinct destination.
-│   │
-│   ├── recover
-│   │   Recover a private key from a complete backup or by collecting enough
-│   │   split shares. Watches for inserted media and tracks quorum progress.
+│   │   ├── create
+│   │   │   Create a threshold recovery set and place each share onto an
+│   │   │   independent destination. Never collect all shares in one ordinary
+│   │   │   local directory.
+│   │   │
+│   │   ├── list
+│   │   │   List recovery splits, optionally restricted to one key.
+│   │   │
+│   │   ├── show
+│   │   │   Show a split's threshold, share placements, metadata, and whether
+│   │   │   quorum is achievable.
+│   │   │
+│   │   ├── verify
+│   │   │   Verify split metadata and optionally exercise reconstruction
+│   │   │   without retaining the reconstructed key.
+│   │   │
+│   │   ├── meta
+│   │   │   Show, set, or remove metadata on a recovery split.
+│   │   │
+│   │   └── retire
+│   │       Stop counting a recovery split as an active recovery mechanism.
 │   │
 │   ├── verify
-│   │   Verify that known recovery paths can still reconstruct the expected key.
+│   │   Verify a complete key copy or recovery path against the expected
+│   │   public-key fingerprint.
 │   │
-│   └── destroy-local
-│       Securely remove any temporary/local plaintext copy after a ceremony.
+│   └── meta
+│       Show, set, or remove metadata on a key.
 │
 ├── media
 │   ├── create
-│   │   Register and initialize removable media as a pkiboo destination.
-│   │   Verifies that the backing device is actually removable.
+│   │   Register and initialize media using the selected backend. Physical
+│   │   removable storage is the first backend; remote storage can be added as
+│   │   another media backend without adding another top-level command.
 │   │
 │   ├── list
-│   │   List all registered removable media and known locations.
+│   │   List all registered media, regardless of backend.
 │   │
-│   ├── show
-│   │   Show media identity, device metadata, location, contents, and last verify.
+│   ├── show [--contents]
+│   │   Show media identity, backend-specific details, metadata, contents,
+│   │   and last verification. With --contents, display only its contents.
 │   │
 │   ├── inspect
-│   │   Inspect currently attached media without modifying it.
-│   │
-│   ├── contents
-│   │   Show which pkiboo artifacts are known to live on the medium.
+│   │   Inspect discoverable media without registering or modifying it.
 │   │
 │   ├── sync
-│   │   Synchronize public metadata and root certificates onto the medium.
+│   │   Synchronize public metadata and certificates onto the medium.
 │   │
 │   ├── verify
 │   │   Read back and validate all pkiboo material expected on the medium.
 │   │
-│   ├── set
-│   │   Manage metadata on the object.
+│   ├── repair
+│   │   Restore a damaged medium's structure and public metadata where
+│   │   possible without silently replacing missing secret material.
+│   │
+│   ├── meta
+│   │   Show, set, or remove metadata on a medium. Physical location,
+│   │   custodian, and failure domain are examples rather than fixed fields.
 │   │
 │   ├── rename
-│   │   Change the friendly name of a registered medium.
+│   │   Change the friendly name of registered media.
 │   │
 │   ├── retire
-│   │   Mark a medium as intentionally no longer in service.
+│   │   Mark media as intentionally no longer in service.
 │   │
 │   └── forget
-│       Remove the medium from inventory after explicit acknowledgement that
+│       Remove media from inventory after explicit acknowledgement that
 │       pkiboo will no longer count its contents toward recoverability.
 │
-├── paper
-│   ├── list
-│   │   List registered paper artifacts.
-│   │
-│   ├── show
-│   │   Show what a paper artifact contains and where it is stored.
-│   │
-│   ├── scan
-│   │   Scan/read a printed pkiboo artifact and contribute it to recovery.
-│   │
-│   ├── import
-│   │   Import a generated PDF or scanned file instead of using a live scanner.
-│   │
-│   ├── verify
-│   │   Verify that a paper artifact is readable and internally valid.
-│   │
-│   ├── set-location
-│   │   Record where the paper copy is physically stored.
-│   │
-│   └── forget
-│       Remove a lost/destroyed paper artifact from the inventory.
-│
-├── remote
-│   ├── add
-│   │   Register a remote share/backup destination such as S3 or B2.
-│   │
-│   ├── list
-│   │   List configured remote destinations.
-│   │
-│   ├── show
-│   │   Show remote type, failure domain, stored placements, and verification.
-│   │
-│   ├── test
-│   │   Verify authentication and perform a safe write/read/delete test.
-│   │
-│   ├── verify
-│   │   Retrieve and validate stored pkiboo artifacts without reconstructing keys.
-│   │
-│   ├── set-location
-│   │   Associate the remote with a logical custody/failure domain.
-│   │
-│   └── remove
-│       Remove a remote destination after checking what recoverability depends on it.
-│
-├── split
-│   ├── list
-│   │   List threshold-recovery splits.
-│   │
-│   ├── show
-│   │   Show threshold, placements, locations, and whether quorum is achievable.
-│   │
-│   ├── verify
-│   │   Verify split metadata and optionally exercise recovery without retaining
-│   │   the recovered key.
-│   │
-│   └── retire
-│       Stop counting an old split as an active recovery mechanism.
-│
-├── recover
-│   ├── key
-│   │   High-level guided recovery of a specific key.
-│   │
-│   ├── root
-│   │   Recover the private key associated with a root CA, then verify it against
-│   │   the public root certificate.
-│   │
-│   └── database
-│       Rebuild pkiboo inventory from removable media, paper artifacts, and
-│       remote metadata after loss of the local database.
-│
-├── intermediate
-│   ├── issue
-│   │   Validate an intermediate CA CSR, recover/access the offline root key,
-│   │   sign it under policy, and emit the intermediate certificate.
-│   │
-│   ├── list
-│   │   List intermediate CA certificates issued by managed roots.
-│   │
-│   ├── show
-│   │   Show issuer, subject, serial, fingerprint, validity, and status.
-│   │
-│   ├── export
-│   │   Export an issued intermediate certificate.
-│   │
-│   └── revoke
-│       Mark an intermediate as revoked/compromised and update the root's
-│       issuance/revocation records as appropriate.
-│
-├── location
-│   ├── add
-│   │   Define a logical or physical storage/custody location.
-│   │
-│   ├── list
-│   │   List known locations and what pkiboo material is associated with them.
-│   │
-│   ├── show
-│   │   Show media/paper/remotes stored in a location and its failure-domain role.
-│   │
-│   ├── rename
-│   │   Rename a location without changing artifact relationships.
-│   │
-│   └── remove
-│       Remove an unused location after ensuring no live placements still use it.
-│
-├── audit
-│   ├── root
-│   │   Audit one root's complete recoverability and operational health.
-│   │
-│   ├── key
-│   │   Audit one private key's backups, splits, and quorum paths.
-│   │
-│   ├── media
-│   │   Find stale, missing, unverified, or retired media.
-│   │
-│   ├── locations
-│   │   Detect correlated-risk problems, such as quorum being satisfiable from
-│   │   one building, one person, or one cloud account.
-│   │
-│   ├── recovery
-│   │   Simulate failure scenarios and determine whether each key remains recoverable.
-│   │
-│   └── all
-│       Run the complete pkiboo health and custody audit.
-│
-├── db
-│   ├── info
-│   │   Show database version, path, schema, and repository identity.
-│   │
-│   ├── backup
-│   │   Back up the non-secret inventory database.
-│   │
-│   ├── restore
-│   │   Restore a previous inventory database backup.
-│   │
-│   ├── rebuild
-│   │   Reconstruct inventory by scanning available pkiboo artifacts.
-│   │
-│   └── verify
-│       Check database consistency and referential integrity.
-│
-└── config
+└── paper
+    ├── list
+    │   List registered paper artifacts.
+    │
     ├── show
-    │   Show effective configuration.
+    │   Show what a paper artifact contains, along with its metadata and
+    │   verification state.
     │
-    ├── get
-    │   Read one configuration value.
+    ├── scan
+    │   Scan or read a printed pkiboo artifact and contribute it to recovery.
     │
-    └── set
-        Change one configuration value.
+    ├── import
+    │   Import a generated PDF or scanned file instead of using a live scanner.
+    │
+    ├── verify
+    │   Verify that a paper artifact is readable and internally valid.
+    │
+    ├── meta
+    │   Show, set, or remove metadata on a paper artifact. Its physical storage
+    │   location can be recorded here.
+    │
+    └── forget
+        Remove a lost or destroyed paper artifact from inventory.
+```
+
+## Certificate creation
+
+`cert create` uses one certificate path for both roots and certificates issued
+by another CA:
+
+```text
+pkiboo cert create --csr <csr-file> --by <issuer-cert>
+```
+
+- `--by` identifies the certificate whose private key signs the new
+  certificate. If it is omitted, the new certificate is self-signed and is
+  therefore a root certificate.
+- `--key` explicitly identifies the subject key.
+- When `--csr` is supplied without `--key`, Pkiboo identifies the managed key
+  from the CSR's requested public key.
+- When both `--csr` and `--key` are supplied, the CSR public key must match the
+  named key.
+- A self-signed certificate still requires an identified subject key, either
+  explicitly through `--key` or by looking it up from the CSR.
+- The issuer key and subject key are separate. For an issued certificate,
+  `--by` selects the issuer certificate and therefore the signing key; `--key`
+  or the CSR selects the key certified by the new certificate.
+- CSR contents remain untrusted requests. Certificate policy determines the
+  extensions and authority actually granted.
+
+Private-key material needed by this command is loaded from media only for the
+operation. It is never relocated into ordinary local storage.
+
+## Generic metadata
+
+Certificates, keys, recovery splits, media, and paper artifacts expose the same
+metadata interface:
+
+```text
+pkiboo <object> meta <object-name> show [<key>...]
+pkiboo <object> meta <object-name> set <key> <value>
+pkiboo <object> meta <object-name> remove <key>
+```
+
+This replaces dedicated location and custody commands. Pkiboo may recommend
+well-known metadata keys later, but they do not need dedicated object types.
+
+## Deferred command groups
+
+`audit` and general-purpose `db` administration are intentionally not included
+in the initial command surface yet. Their useful behavior is partly covered by
+`status` and object-specific `verify` commands. They can be added once concrete
+workflows establish which additional operations users need.
+
+Configuration commands are also deferred until Pkiboo has user-editable
+configuration that cannot be expressed as object metadata or ordinary command
+options.
