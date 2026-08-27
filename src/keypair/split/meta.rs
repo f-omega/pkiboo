@@ -4,6 +4,7 @@ use std::error::Error;
 #[derive(clap::Args)]
 pub struct Args {
     /// Name of the recovery split
+    #[arg(long)]
     split: Name<crate::pkiboo::Split>,
 
     #[command(flatten)]

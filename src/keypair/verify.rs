@@ -3,6 +3,7 @@ use std::error::Error;
 #[derive(clap::Args)]
 pub struct Args {
     /// Name of the key
+    #[arg(long)]
     key: String,
 
     /// Verify this particular medium

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 #[derive(clap::Args)]
 pub struct Args {
     /// PDF or image containing a paper artifact
+    #[arg(long)]
     file: PathBuf,
 }
 

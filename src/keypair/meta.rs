@@ -4,6 +4,7 @@ use std::error::Error;
 #[derive(clap::Args)]
 pub struct Args {
     /// Name of the key
+    #[arg(long)]
     key: Name<crate::pkiboo::Key>,
 
     #[command(flatten)]

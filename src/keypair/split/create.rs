@@ -3,6 +3,7 @@ use std::error::Error;
 #[derive(clap::Args)]
 pub struct Args {
     /// Key to split
+    #[arg(long)]
     key: String,
     /// Name for the recovery split
     #[arg(long)]

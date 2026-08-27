@@ -293,7 +293,7 @@ impl<'a> DbTx<'a> {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Key {
     pub name: Name<Self>,
-    algorithm: crate::keypair::Algorithm,
+    pub algorithm: crate::keypair::Algorithm,
 
     /// PEM-encoded public key
     pub public_key: String,

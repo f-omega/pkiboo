@@ -3,6 +3,7 @@ use std::error::Error;
 #[derive(clap::Parser)]
 pub struct Args {
     /// Key to copy
+    #[arg(long)]
     key: String,
 
     /// Destination media for the new complete copy

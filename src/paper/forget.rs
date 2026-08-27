@@ -3,6 +3,7 @@ use std::error::Error;
 #[derive(clap::Args)]
 pub struct Args {
     /// Name of the paper artifact
+    #[arg(long)]
     paper: String,
     /// Confirm that the artifact should no longer count toward recovery
     #[arg(long)]

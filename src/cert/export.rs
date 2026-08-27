@@ -10,6 +10,7 @@ enum Format {
 #[derive(clap::Args)]
 pub struct Args {
     /// Name of the certificate
+    #[arg(long)]
     cert: String,
 
     /// Certificate encoding
