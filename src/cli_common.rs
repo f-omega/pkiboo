@@ -1,8 +1,10 @@
 use crate::ui::{
-    ListModel, ListView, Presenter, PropertyList, PropertyListView, Task, TaskStarter, Ui,
+    ListModel, ListView, Pane, PaneStarter, Presenter, PropertyList, PropertyListView, Task,
+    TaskStarter, Ui,
 };
 use crate::ui::{TaskId, TaskTree};
 use anstyle::{AnsiColor, Style};
+use async_trait::async_trait;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::IsTerminal;
@@ -77,6 +79,16 @@ struct CliTaskState {
     // is live, then remove it after printing the final status above the live
     // progress area.
     bars: HashMap<TaskId, indicatif::ProgressBar>,
+
+    next_pane_id: usize,
+    next_pane_to_flush: usize,
+    panes: HashMap<usize, CliPaneState>,
+}
+
+#[derive(Default)]
+struct CliPaneState {
+    lines: Vec<String>,
+    finished: bool,
 }
 
 impl CliTasks {
@@ -84,6 +96,77 @@ impl CliTasks {
         Self {
             progress: indicatif::MultiProgress::new(),
             state: Mutex::new(CliTaskState::default()),
+        }
+    }
+
+    fn start_pane(self: &Arc<Self>, title: String) -> CliPane {
+        let heading = if std::io::stderr().is_terminal() {
+            let style = Style::new().bold();
+            format!("{style}{title}{style:#}")
+        } else {
+            title
+        };
+
+        let mut state = self.state.lock().expect("CLI task tree lock poisoned");
+        let id = state.next_pane_id;
+        state.next_pane_id += 1;
+        state.panes.insert(
+            id,
+            CliPaneState {
+                lines: vec![heading],
+                finished: false,
+            },
+        );
+
+        CliPane {
+            tasks: self.clone(),
+            id,
+        }
+    }
+
+    fn print_output(&self, pane_id: Option<usize>, output: String) {
+        match pane_id {
+            Some(id) => {
+                let mut state = self.state.lock().expect("CLI task tree lock poisoned");
+                state
+                    .panes
+                    .get_mut(&id)
+                    .expect("pane must still be open")
+                    .lines
+                    .push(output);
+            }
+            None => {
+                let _ = self.progress.println(output);
+            }
+        }
+    }
+
+    fn finish_pane(&self, id: usize) {
+        let completed_output = {
+            let mut state = self.state.lock().expect("CLI task tree lock poisoned");
+            state
+                .panes
+                .get_mut(&id)
+                .expect("pane must still be open")
+                .finished = true;
+
+            let mut output = Vec::new();
+            loop {
+                let next = state.next_pane_to_flush;
+                let is_finished = state.panes.get(&next).is_some_and(|pane| pane.finished);
+                if !is_finished {
+                    break;
+                }
+
+                let pane = state.panes.remove(&next).expect("finished pane exists");
+                output.extend(pane.lines);
+                state.next_pane_to_flush += 1;
+            }
+            output
+        };
+
+        for line in completed_output {
+            let _ = self.progress.println(line);
         }
     }
 
@@ -236,15 +319,31 @@ pub struct CliTask {
 
 pub struct CliList {
     tasks: Arc<CliTasks>,
+    pane_id: Option<usize>,
     options: crate::util::ListOptions,
     inner: Box<dyn ListModel>,
 }
 
 pub struct CliPropertyList {
     tasks: Arc<CliTasks>,
+    pane_id: Option<usize>,
     properties: PropertyList,
 }
 
+#[derive(Clone)]
+pub struct CliPane {
+    tasks: Arc<CliTasks>,
+    id: usize,
+}
+
+#[async_trait(?Send)]
+impl Pane for CliPane {
+    async fn finish(&self) {
+        self.tasks.finish_pane(self.id);
+    }
+}
+
+#[async_trait(?Send)]
 impl Task for CliTask {
     async fn mark_complete(&self) {
         let detail = self
@@ -295,6 +394,7 @@ impl Presenter for CliTask {
     fn list<L: ListModel + 'static>(&self, list: L) -> Self::List {
         CliList {
             tasks: self.tasks.clone(),
+            pane_id: None,
             inner: Box::new(list),
             options: crate::util::ListOptions::new(),
         }
@@ -303,11 +403,22 @@ impl Presenter for CliTask {
     fn property_list(&self, properties: PropertyList) -> Self::Properties {
         CliPropertyList {
             tasks: self.tasks.clone(),
+            pane_id: None,
             properties,
         }
     }
 }
 
+#[async_trait(?Send)]
+impl PaneStarter for CliTask {
+    type PaneHandle = CliPane;
+
+    async fn start_pane(&self, title: String) -> Self::PaneHandle {
+        self.tasks.start_pane(title)
+    }
+}
+
+#[async_trait(?Send)]
 impl TaskStarter for CliTask {
     type TaskHandle = CliTask;
 
@@ -316,6 +427,7 @@ impl TaskStarter for CliTask {
     }
 }
 
+#[async_trait(?Send)]
 impl TaskStarter for CliBackend {
     type TaskHandle = CliTask;
 
@@ -324,6 +436,29 @@ impl TaskStarter for CliBackend {
     }
 }
 
+impl Presenter for CliPane {
+    type List = CliList;
+    type Properties = CliPropertyList;
+
+    fn list<L: ListModel + 'static>(&self, list: L) -> Self::List {
+        CliList {
+            tasks: self.tasks.clone(),
+            pane_id: Some(self.id),
+            inner: Box::new(list),
+            options: crate::util::ListOptions::new(),
+        }
+    }
+
+    fn property_list(&self, properties: PropertyList) -> Self::Properties {
+        CliPropertyList {
+            tasks: self.tasks.clone(),
+            pane_id: Some(self.id),
+            properties,
+        }
+    }
+}
+
+#[async_trait(?Send)]
 impl ListView for CliList {
     fn with_options(mut self, options: &crate::util::ListOptions) -> Self {
         self.options = options.clone();
@@ -357,10 +492,11 @@ impl ListView for CliList {
             }
             table.add_row(cells);
         }
-        let _ = self.tasks.progress.println(table.to_string());
+        self.tasks.print_output(self.pane_id, table.to_string());
     }
 }
 
+#[async_trait(?Send)]
 impl PropertyListView for CliPropertyList {
     async fn display(&self) {
         let label_width = self
@@ -378,7 +514,7 @@ impl PropertyListView for CliPropertyList {
             } else {
                 title.clone()
             };
-            let _ = self.tasks.progress.println(title);
+            self.tasks.print_output(self.pane_id, title);
         }
 
         for property in &self.properties.properties {
@@ -389,11 +525,12 @@ impl PropertyListView for CliPropertyList {
             } else {
                 format!("  {label}  {}", property.value)
             };
-            let _ = self.tasks.progress.println(line);
+            self.tasks.print_output(self.pane_id, line);
         }
     }
 }
 
+#[async_trait(?Send)]
 impl Ui for CliBackend {
     async fn ready(&self) {
         match self.ready.borrow_mut().wait_for(|r| *r).await {
@@ -410,6 +547,7 @@ impl Presenter for CliBackend {
     fn list<L: crate::ui::ListModel + 'static>(&self, list: L) -> Self::List {
         CliList {
             tasks: self.tasks.clone(),
+            pane_id: None,
             inner: Box::new(list),
             options: crate::util::ListOptions::new(),
         }
@@ -418,7 +556,45 @@ impl Presenter for CliBackend {
     fn property_list(&self, properties: PropertyList) -> Self::Properties {
         CliPropertyList {
             tasks: self.tasks.clone(),
+            pane_id: None,
             properties,
         }
+    }
+}
+
+#[async_trait(?Send)]
+impl PaneStarter for CliBackend {
+    type PaneHandle = CliPane;
+
+    async fn start_pane(&self, title: String) -> Self::PaneHandle {
+        self.tasks.start_pane(title)
+    }
+}
+
+#[cfg(test)]
+mod pane_tests {
+    use super::*;
+
+    #[test]
+    fn completed_panes_flush_in_creation_order() {
+        let tasks = Arc::new(CliTasks::new());
+        let first = tasks.start_pane("First".into());
+        let second = tasks.start_pane("Second".into());
+
+        tasks.print_output(Some(second.id), "second output".into());
+        tasks.finish_pane(second.id);
+
+        {
+            let state = tasks.state.lock().expect("CLI task tree lock poisoned");
+            assert_eq!(state.next_pane_to_flush, 0);
+            assert_eq!(state.panes.len(), 2);
+        }
+
+        tasks.print_output(Some(first.id), "first output".into());
+        tasks.finish_pane(first.id);
+
+        let state = tasks.state.lock().expect("CLI task tree lock poisoned");
+        assert_eq!(state.next_pane_to_flush, 2);
+        assert!(state.panes.is_empty());
     }
 }

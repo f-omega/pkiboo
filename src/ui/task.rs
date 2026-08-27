@@ -1,11 +1,11 @@
-#![allow(async_fn_in_trait)]
-
+use async_trait::async_trait;
 use std::error::Error;
 use std::future::Future;
 
 /// Something that can start a task.
 ///
 /// A UI starts root tasks. A task starts child tasks.
+#[async_trait(?Send)]
 pub trait TaskStarter {
     type TaskHandle: Task + Clone;
 
@@ -13,7 +13,10 @@ pub trait TaskStarter {
 }
 
 /// A running task exposed by a UI backend.
-pub trait Task: TaskStarter<TaskHandle = Self> + super::Presenter + Send + Sync + Clone {
+#[async_trait(?Send)]
+pub trait Task:
+    TaskStarter<TaskHandle = Self> + super::PaneStarter + super::Presenter + Send + Sync + Clone
+{
     async fn set_message(&self, message: String);
     async fn mark_complete(&self);
     async fn mark_error(&self, message: String);
@@ -21,6 +24,7 @@ pub trait Task: TaskStarter<TaskHandle = Self> + super::Presenter + Send + Sync 
 }
 
 #[allow(dead_code)]
+#[async_trait(?Send)]
 pub trait Progress {
     async fn set_progress(&self, progress: usize);
     async fn set_task(&self, task: &String);
@@ -28,6 +32,7 @@ pub trait Progress {
 }
 
 /// Convenience operations available to every task starter.
+#[async_trait(?Send)]
 pub trait TaskStarterExt: TaskStarter {
     async fn task<A, R, Operation>(
         &self,
@@ -39,6 +44,7 @@ pub trait TaskStarterExt: TaskStarter {
         Operation: FnOnce(Self::TaskHandle) -> R;
 }
 
+#[async_trait(?Send)]
 impl<T: TaskStarter> TaskStarterExt for T {
     async fn task<A, R, Operation>(
         &self,

@@ -1,4 +1,5 @@
-use crate::ui::{ListView, Presenter, Property, PropertyList, PropertyListView, TaskStarterExt};
+use crate::ui::{ListView, PaneStarterExt, Presenter, Property, PropertyList, PropertyListView};
+use futures::future::try_join;
 use std::error::Error;
 
 struct ExpectedEntity {
@@ -43,22 +44,6 @@ pub async fn main<Ui: crate::Ui>(
         .lookup_media_by_id(&media_id)
         .ok_or(format!("Could not find media {media_id}"))?;
 
-    if !args.contents {
-        boo.ui()
-            .task("Media details".into(), async |task| {
-                task.property_list(PropertyList::new([
-                    Property::new("Name", media.label.to_string()),
-                    Property::new("ID", media.id.to_string()),
-                    Property::new("Trusted", if media.trusted { "yes" } else { "no" }),
-                ]))
-                .display()
-                .await;
-
-                Ok(())
-            })
-            .await?;
-    }
-
     // This is desired state from the database. It deliberately does not imply
     // that an attached medium currently contains readable, verified copies.
     let expected_entities = db
@@ -70,12 +55,37 @@ pub async fn main<Ui: crate::Ui>(
         })
         .collect::<Vec<_>>();
 
-    boo.ui()
-        .task("Expected contents".into(), async |task| {
-            task.list(expected_entities).display().await;
+    let expected_contents = boo.ui().pane(
+        "Expected contents".into(),
+        async |pane| -> Result<(), Box<dyn Error>> {
+            pane.list(expected_entities).display().await;
             Ok(())
-        })
-        .await?;
+        },
+    );
+
+    if args.contents {
+        expected_contents.await?;
+    } else {
+        let media_details = boo.ui().pane(
+            "Media details".into(),
+            async |pane| -> Result<(), Box<dyn Error>> {
+                pane.property_list(PropertyList::new([
+                    Property::new("Name", media.label.to_string()),
+                    Property::new("ID", media.id.to_string()),
+                    Property::new("Trusted", if media.trusted { "yes" } else { "no" }),
+                ]))
+                .display()
+                .await;
+
+                Ok(())
+            },
+        );
+
+        // Both panes are driven concurrently. The CLI backend buffers their
+        // output and flushes it in pane creation order; a graphical backend
+        // can expose and populate both panes independently.
+        try_join(media_details, expected_contents).await?;
+    }
 
     Ok(())
 }

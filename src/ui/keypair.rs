@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
 use openssl::pkey::{PKey, Private};
 use secrecy::ExposeSecret;
@@ -12,6 +13,7 @@ use crate::{
 use super::{Task, TaskStarterExt};
 
 #[allow(dead_code)]
+#[async_trait(?Send)]
 pub trait UiKeypairExt: Task {
     /// Load a private key from the first complete copy that becomes available.
     ///
@@ -113,4 +115,5 @@ pub trait UiKeypairExt: Task {
     }
 }
 
+#[async_trait(?Send)]
 impl<T: Task> UiKeypairExt for T {}

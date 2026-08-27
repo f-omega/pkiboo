@@ -1,10 +1,12 @@
-#![allow(async_fn_in_trait)]
+use async_trait::async_trait;
 
 pub mod keypair;
+mod pane;
 mod presenter;
 mod task;
 
 pub use keypair::*;
+pub use pane::*;
 pub use presenter::*;
 pub use task::*;
 
@@ -20,6 +22,7 @@ pub use task::*;
 //     async fn start(&self, prompt: Box<dyn Prompt>);
 // }
 
+#[async_trait(?Send)]
 pub trait ListView {
     fn with_options(self, options: &crate::util::ListOptions) -> Self;
     async fn display(&self);
@@ -50,7 +53,8 @@ impl<Item: ListItem> ListModel for Vec<Item> {
     }
 }
 
-pub trait Ui: TaskStarter + Presenter {
+#[async_trait(?Send)]
+pub trait Ui: TaskStarter + PaneStarter + Presenter {
     async fn ready(&self);
     //    async fn ask(&self, prompt: Box<dyn Prompter>);
 }

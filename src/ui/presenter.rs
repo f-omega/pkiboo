@@ -40,6 +40,7 @@ impl PropertyList {
     }
 }
 
+#[async_trait(?Send)]
 pub trait PropertyListView {
     async fn display(&self);
 }
@@ -55,3 +56,4 @@ pub trait Presenter {
     fn list<L: super::ListModel + 'static>(&self, list: L) -> Self::List;
     fn property_list(&self, properties: PropertyList) -> Self::Properties;
 }
+use async_trait::async_trait;
