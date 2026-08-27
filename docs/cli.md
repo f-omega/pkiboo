@@ -91,10 +91,14 @@ pkiboo
 │       Show, set, or remove metadata on a key.
 │
 ├── media
-│   ├── create
-│   │   Register and initialize media using the selected backend. Physical
-│   │   removable storage is the first backend; remote storage can be added as
-│   │   another media backend without adding another top-level command.
+│   ├── create --name <name> (--path <mount> | --device <block-device>)
+│   │   Register and initialize physical media. --path uses an existing mount;
+│   │   --device identifies the filesystem block device and lets Pkiboo mount
+│   │   it through UDisks after safety checks pass. Storage attached over USB,
+│   │   Thunderbolt, or FireWire whose kernel removable bit is unset requires
+│   │   --allow-external-bus. SD cards are accepted when the kernel marks them
+│   │   removable; ambiguous SDIO/MMC devices remain fixed because they may be
+│   │   internal eMMC storage.
 │   │
 │   ├── list
 │   │   List all registered media, regardless of backend.

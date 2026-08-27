@@ -10,6 +10,19 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaAttachment {
+    RemovableMedia,
+    ExternalBus,
+    Fixed,
+}
+
+impl MediaAttachment {
+    pub fn is_detachable(self) -> bool {
+        matches!(self, Self::RemovableMedia | Self::ExternalBus)
+    }
+}
+
 pub enum ReleaseResult {
     /// Pkiboo mounted the medium and has now unmounted it.
     Released,
@@ -23,7 +36,7 @@ pub enum ReleaseResult {
 }
 
 pub struct MediaTrustDomain {
-    pub removable: bool,
+    pub attachment: MediaAttachment,
     pub trusted: bool,
 }
 
@@ -88,8 +101,8 @@ impl Media for FileSystem {
     async fn trust_domain(&self) -> Result<MediaTrustDomain, Box<dyn Error>> {
         let info = physical::get_device_info(&self.base_path().await?)?;
         Ok(MediaTrustDomain {
-            removable: info.removable,
-            trusted: info.removable,
+            attachment: info.attachment,
+            trusted: info.attachment.is_detachable() && !info.system_disk,
         })
     }
 
