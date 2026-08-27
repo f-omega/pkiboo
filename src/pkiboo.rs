@@ -7,22 +7,13 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::io::IsTerminal;
 use std::io::Read;
-use std::{collections::HashMap, path::{Path, PathBuf},
-          sync::Arc,
-          error::Error};
-use serde::{Serialize, Deserialize};
-use crate::util::Name;
-use crate::ui::{Ui, ListView};
-use crate::cli_common::CliBackend;
 use std::os::fd::AsRawFd;
 use std::{
     collections::HashMap,
     error::Error,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
 
 pub struct PkiBoo<UiBackend> {
     db_path: PathBuf,

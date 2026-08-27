@@ -34,12 +34,16 @@ its visual layout and interaction style.
 
 ## Current implementation
 
-The UI abstraction currently lives in `src/ui/mod.rs`, with its CLI backend in
+The UI abstraction is re-exported from `src/ui/mod.rs`. Task traits and the
+backend-neutral task tree live in `src/ui/task.rs`, with the CLI backend in
 `src/cli_common.rs`.
 
-`Ui` currently provides:
+`TaskStarter` is the common capability shared by UIs and tasks. It provides
+`start_task` and an associated backend-specific task handle. Starting a task
+from a UI creates a root task; starting one from a task creates its child.
 
-- `start_task`, which creates a backend-specific task handle;
+`Ui` extends `TaskStarter` and additionally provides:
+
 - `ready`, which waits until the backend is ready;
 - `list`, which creates a backend-specific list view.
 
@@ -50,14 +54,21 @@ A `Task` handle can:
 - mark itself failed with an error message;
 - display a list of named properties.
 
-`UiExt::task` wraps a future in this lifecycle. It creates the task, passes a
-cloneable handle into the future, and automatically marks the task complete or
-failed according to the result. This keeps lifecycle bookkeeping out of each
-workflow.
+`UiExt` extends `TaskStarter`, rather than `Ui`, so its `task` helper works on
+both a root UI and a running task. It creates a task, passes a cloneable handle
+into the future, and automatically marks the task complete or failed according
+to the result. This keeps lifecycle bookkeeping out of each workflow and makes
+nested operations natural.
 
 The CLI backend implements tasks with `indicatif::MultiProgress`, property
 lists with key/value output, and lists with `comfy_table`. Progress indicators
 are hidden when stderr is not a terminal.
+
+The CLI maintains tasks in depth-first tree order. A new child is inserted after
+its parent's existing descendant subtree and is indented according to its tree
+depth. The backend retains strong handles to completed progress bars so their
+rows remain available while later tasks redraw. Indicatif renders an ordered
+flat collection of bars; Pkiboo supplies and maintains the hierarchy.
 
 The abstraction is backend-generic, but still small. In particular:
 
@@ -296,15 +307,18 @@ The exact Rust types can evolve, but interactions should be asynchronous,
 typed, and associated with tasks. One possible shape is:
 
 ```rust,ignore
-trait Ui {
-    type TaskHandle: TaskHandle + Clone;
-
+trait Ui: TaskStarter {
     async fn ready(&self) -> Result<(), UiError>;
-    async fn start_task(&self, spec: TaskSpec) -> Result<Self::TaskHandle, UiError>;
     async fn interact<I: Interaction>(&self, task: &Self::TaskHandle, request: I)
         -> Result<I::Output, InteractionError>;
     async fn present(&self, task: Option<&Self::TaskHandle>, output: Output)
         -> Result<(), UiError>;
+}
+
+trait TaskStarter {
+    type TaskHandle: Task + Clone;
+
+    async fn start_task(&self, spec: TaskSpec) -> Result<Self::TaskHandle, UiError>;
 }
 
 trait Interaction {
