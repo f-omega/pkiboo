@@ -130,9 +130,13 @@ pkiboo
 │   ├── retire
 │   │   Mark media as intentionally no longer in service.
 │   │
-│   └── forget
-│       Remove media from inventory after explicit acknowledgement that
-│       pkiboo will no longer count its contents toward recoverability.
+│   └── forget [--dry-run] [--allow-reduced-redundancy] [--force]
+│       Remove media from inventory only when every private entity it contains
+│       has a fresh verified copy on another medium and remains above its
+│       routine redundancy target. --allow-reduced-redundancy overrides only
+│       the redundancy target; --force overrides all safety checks.
+│       --dry-run reports whether the safety check passes without changing the
+│       database.
 │
 └── paper
     ├── list

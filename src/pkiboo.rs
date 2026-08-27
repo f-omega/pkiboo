@@ -239,6 +239,26 @@ impl<'a> DbTx<'a> {
         self.media.push(m)
     }
 
+    /// Remove a medium from inventory and from every private entity's backup
+    /// and verification state. Safety policy is checked by the caller before
+    /// this low-level mutation is performed.
+    pub fn forget_media(&mut self, media: &Name<Media>) {
+        self.media.retain(|candidate| &candidate.label != media);
+
+        for key in &mut self.keys {
+            key.backups.retain(|backup| backup != media);
+            key.verifications
+                .retain(|verification| &verification.media != media);
+        }
+
+        for split in &mut self.splits {
+            split.backups.retain(|backup| backup != media);
+            split
+                .verifications
+                .retain(|verification| &verification.media != media);
+        }
+    }
+
     pub fn update_cert(&mut self, mut cert: Cert) -> Result<Cert, Box<dyn Error>> {
         match self
             .certs
@@ -473,6 +493,9 @@ pub struct PrivateEntityVerification {
 /// reevaluates every private copy from its durable verification timestamp.
 pub const VERIFICATION_MAX_AGE_DAYS: i64 = 90;
 
+/// A key should retain at least two independent complete copies.
+pub const MIN_KEY_REPLICAS: usize = 2;
+
 fn record_verification(
     verifications: &mut Vec<PrivateEntityVerification>,
     media: Name<Media>,
@@ -631,6 +654,10 @@ pub trait PrivateEntity: Entity {
     /// Most recent successful verification for each stored copy or share.
     fn verifications(&self) -> &[PrivateEntityVerification];
 
+    /// Healthy routine redundancy. For a split this deliberately means every
+    /// configured share, rather than merely its emergency recovery quorum.
+    fn required_replicas(&self) -> usize;
+
     fn verification_on(&self, media: &Name<Media>) -> Option<&PrivateEntityVerification> {
         self.verifications()
             .iter()
@@ -646,6 +673,22 @@ pub trait PrivateEntity: Entity {
         self.backups().iter().any(|media| {
             self.verification_on(media)
                 .is_none_or(|verification| verification.verified_at < oldest_current)
+        })
+    }
+
+    /// Whether this entity has a recently verified copy on some medium other
+    /// than the one being removed from inventory.
+    fn has_fresh_verification_elsewhere(
+        &self,
+        excluded_media: &Name<Media>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let oldest_current = now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS);
+        self.backups().iter().any(|media| {
+            media != excluded_media
+                && self
+                    .verification_on(media)
+                    .is_some_and(|verification| verification.verified_at >= oldest_current)
         })
     }
 }
@@ -686,6 +729,10 @@ impl PrivateEntity for Key {
     fn verifications(&self) -> &[PrivateEntityVerification] {
         &self.verifications
     }
+
+    fn required_replicas(&self) -> usize {
+        MIN_KEY_REPLICAS
+    }
 }
 
 impl Entity for Split {
@@ -709,6 +756,10 @@ impl PrivateEntity for Split {
 
     fn verifications(&self) -> &[PrivateEntityVerification] {
         &self.verifications
+    }
+
+    fn required_replicas(&self) -> usize {
+        self.num_splits as usize
     }
 }
 
