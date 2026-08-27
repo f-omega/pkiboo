@@ -44,6 +44,27 @@ impl PrivateKey {
     }
 }
 
+impl Signature {
+    /// Verify this signature against the exact bytes that were originally
+    /// signed.
+    pub fn verify(
+        &self,
+        public_key: &openssl::pkey::PKey<openssl::pkey::Public>,
+        data: &[u8],
+    ) -> Result<bool, Box<dyn Error>> {
+        let mut verifier = openssl::sign::Verifier::new(signing_message_digest(), public_key)
+            .map_err(|error| format!("Could not create signature verifier: {error:?}"))?;
+
+        verifier
+            .update(data)
+            .map_err(|error| format!("Could not provide signed data to OpenSSL: {error:?}"))?;
+
+        verifier
+            .verify(&self.bytes)
+            .map_err(|error| format!("Could not verify signature with OpenSSL: {error:?}").into())
+    }
+}
+
 impl ToString for Signature {
     fn to_string(&self) -> String {
         self.bytes

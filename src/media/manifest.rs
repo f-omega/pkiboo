@@ -61,12 +61,9 @@ impl SignedFile {
         })
     }
 
-    #[allow(dead_code)]
     fn verifies(&self, key: &openssl::pkey::PKey<openssl::pkey::Public>) -> Result<bool, Box<dyn Error>> {
         let nonce = Self::nonce(&self.path, self.hash.to_string());
-        let verifier = openssl::sign::Verifier::new(crate::keypair::signing_message_digest(),
-                                                    key)?;
-        Ok(verifier.verify(nonce.as_bytes())?)
+        self.signature.verify(key, nonce.as_bytes())
     }
 }
 
