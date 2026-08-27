@@ -89,12 +89,6 @@ impl MultiHash {
     }
 }
 
-impl ToString for MultiHash {
-    fn to_string(&self) -> String {
-        format!("{}:{}", self.kind.to_string(), self.hex_encoded)
-    }
-}
-
 impl Serialize for MultiHash {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -117,5 +111,11 @@ impl<'de> Deserialize<'de> for MultiHash {
             },
             None => Err(serde::de::Error::unknown_variant(hash, HashAlgorithm::variants()))
         }
+    }
+}
+
+impl std::fmt::Display for MultiHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.kind.to_string(), self.hex_encoded)
     }
 }

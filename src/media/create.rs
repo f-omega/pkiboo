@@ -1,6 +1,6 @@
 use std::error::Error;
 use clap::ArgGroup;
-use crate::ui::{UiExt, Task};
+use crate::ui::{TaskStarterExt, Task};
 use crate::util::Name;
 use crate::pkiboo::Media;
 use super::manifest::OpenManifest;

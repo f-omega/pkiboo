@@ -1,4 +1,4 @@
-use crate::ui::{Task, UiExt};
+use crate::ui::{Task, TaskStarterExt};
 use futures::future::try_join_all;
 use std::error::Error;
 

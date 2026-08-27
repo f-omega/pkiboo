@@ -1,7 +1,7 @@
 use futures::future::try_join_all;
 use std::error::Error;
 use itertools::Itertools;
-use crate::ui::{Task, UiExt};
+use crate::ui::{Task, TaskStarterExt};
 use crate::pkiboo::{Media, Key};
 use crate::media::MediaId;
 use crate::media::OpenManifest;

@@ -11,7 +11,7 @@ pub trait TaskStarter {
 }
 
 /// A running task exposed by a UI backend.
-pub trait Task: TaskStarter<TaskHandle = Self> + Clone {
+pub trait Task: TaskStarter<TaskHandle = Self> + Send + Sync + Clone {
     async fn set_message(&self, message: String);
     async fn mark_complete(&self);
     async fn mark_error(&self, message: String);
@@ -26,7 +26,7 @@ pub trait Progress {
 }
 
 /// Convenience operations available to every task starter.
-pub trait UiExt: TaskStarter {
+pub trait TaskStarterExt: TaskStarter {
     async fn task<A, R, Operation>(
         &self,
         description: String,
@@ -37,7 +37,7 @@ pub trait UiExt: TaskStarter {
         Operation: FnOnce(Self::TaskHandle) -> R;
 }
 
-impl<T: TaskStarter> UiExt for T {
+impl<T: TaskStarter> TaskStarterExt for T {
     async fn task<A, R, Operation>(
         &self,
         description: String,

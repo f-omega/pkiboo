@@ -1,5 +1,5 @@
 use std::error::Error;
-use crate::ui::{UiExt, Task};
+use crate::ui::{TaskStarterExt, Task};
 
 #[derive(clap::Parser)]
 pub struct Args {

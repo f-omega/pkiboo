@@ -1,6 +1,6 @@
 use crate::cli_common::Duration;
 use crate::pkiboo::{Cert, Key};
-use crate::ui::UiExt;
+use crate::ui::TaskStarterExt;
 use crate::ui::keypair::UiKeypairExt;
 use crate::util::Name;
 use openssl::pkey::{PKey, Public};

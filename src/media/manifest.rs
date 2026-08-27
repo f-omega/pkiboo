@@ -124,15 +124,15 @@ impl OpenManifest {
             // Read the file from media
             let data = secrecy::SecretBox::new(
                 Box::new(
-                    self.media.get(&path.to_string_lossy().to_string()).await?.ok_or(format!("File {} was found in the manifest but not present, run 'media repair' to attempt to repair this media", path.display()).into())?
+                    self.media.get(&path.to_string_lossy().to_string()).await?.ok_or::<String>(format!("File {} was found in the manifest but not present, run 'media repair' to attempt to repair this media", path.display()).into())?
                 ));
 
-            let key = db.lookup_key(&sfile.key).ok_or(format!("File was signed by key {} which could not be found", sfile.key).into())?;
+            let key = db.lookup_key(&sfile.key).ok_or::<String>(format!("File was signed by key {} which could not be found", sfile.key).into())?;
             let pkey = key.load_public_key()?;
 
-            let actual_hash = MultiHash::hash(sfile.hash.kind, data.expose_secret());
+            let actual_hash = MultiHash::hash(sfile.hash.kind.clone(), data.expose_secret());
             if actual_hash != sfile.hash {
-                return Err(format!("File contents do not match. Got hash {}, expected {}", actual_hash, sfile.hash))
+                return Err(format!("File contents do not match. Got hash {}, expected {}", actual_hash, sfile.hash).into())
             }
 
             if sfile.verifies(&pkey)? {
