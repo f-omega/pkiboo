@@ -1,5 +1,5 @@
 use super::backend::Media as MediaBackend;
-use super::manifest::{OpenManifest, OpenManifestError};
+use super::manifest::{ManifestFileError, OpenManifest, OpenManifestError};
 use crate::pkiboo::{Db, Media};
 use crate::util::Name;
 use std::collections::{HashMap, HashSet};
@@ -21,9 +21,35 @@ pub enum MediaIssue {
     DuplicateManifestEntry {
         path: PathBuf,
     },
-    InvalidManifestEntry {
+    UnreadableFile {
         path: PathBuf,
         message: String,
+    },
+    MissingFile {
+        path: PathBuf,
+    },
+    UnknownSigningKey {
+        path: PathBuf,
+        key: String,
+    },
+    InvalidSigningKey {
+        path: PathBuf,
+        key: String,
+        message: String,
+    },
+    HashMismatch {
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
+    SignatureCheckFailed {
+        path: PathBuf,
+        key: String,
+        message: String,
+    },
+    InvalidSignature {
+        path: PathBuf,
+        key: String,
     },
     MissingExpectedEntry {
         path: PathBuf,
@@ -136,14 +162,8 @@ impl MediaAssessment {
                     path,
                     signing_key: entry.key.to_string(),
                 }),
-                Ok(None) => assessment.issues.push(MediaIssue::InvalidManifestEntry {
-                    path,
-                    message: "Manifest entry disappeared during assessment".into(),
-                }),
-                Err(error) => assessment.issues.push(MediaIssue::InvalidManifestEntry {
-                    path,
-                    message: error.to_string(),
-                }),
+                Ok(None) => assessment.issues.push(MediaIssue::MissingFile { path }),
+                Err(error) => assessment.issues.push(issue_for_file_error(path, error)),
             }
         }
 
@@ -156,6 +176,41 @@ impl MediaAssessment {
         }
 
         Ok(assessment)
+    }
+}
+
+fn issue_for_file_error(path: PathBuf, error: ManifestFileError) -> MediaIssue {
+    match error {
+        ManifestFileError::Read(error) => MediaIssue::UnreadableFile {
+            path,
+            message: error.to_string(),
+        },
+        ManifestFileError::Missing => MediaIssue::MissingFile { path },
+        ManifestFileError::UnknownSigningKey(key) => MediaIssue::UnknownSigningKey {
+            path,
+            key: key.to_string(),
+        },
+        ManifestFileError::InvalidPublicKey { key, source } => MediaIssue::InvalidSigningKey {
+            path,
+            key: key.to_string(),
+            message: source.to_string(),
+        },
+        ManifestFileError::HashMismatch { expected, actual } => MediaIssue::HashMismatch {
+            path,
+            expected,
+            actual,
+        },
+        ManifestFileError::SignatureCheck { key, source } => {
+            MediaIssue::SignatureCheckFailed {
+                path,
+                key: key.to_string(),
+                message: source.to_string(),
+            }
+        }
+        ManifestFileError::InvalidSignature(key) => MediaIssue::InvalidSignature {
+            path,
+            key: key.to_string(),
+        },
     }
 }
 

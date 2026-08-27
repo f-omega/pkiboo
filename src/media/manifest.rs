@@ -93,6 +93,65 @@ pub enum OpenManifestError {
     Invalid(Box<dyn Error>),
 }
 
+/// A failure while validating one file named by an open manifest.
+pub enum ManifestFileError {
+    Read(Box<dyn Error>),
+    Missing,
+    UnknownSigningKey(Name<Key>),
+    InvalidPublicKey {
+        key: Name<Key>,
+        source: Box<dyn Error>,
+    },
+    HashMismatch {
+        expected: String,
+        actual: String,
+    },
+    SignatureCheck {
+        key: Name<Key>,
+        source: Box<dyn Error>,
+    },
+    InvalidSignature(Name<Key>),
+}
+
+impl fmt::Debug for ManifestFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+impl fmt::Display for ManifestFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read(error) => write!(f, "could not read file: {error}"),
+            Self::Missing => write!(f, "file is named by the manifest but is missing"),
+            Self::UnknownSigningKey(key) => write!(f, "signing key {key} is unknown"),
+            Self::InvalidPublicKey { key, source } => {
+                write!(f, "could not load public key {key}: {source}")
+            }
+            Self::HashMismatch { expected, actual } => {
+                write!(f, "hash mismatch: expected {expected}, got {actual}")
+            }
+            Self::SignatureCheck { key, source } => {
+                write!(f, "could not check signature from key {key}: {source}")
+            }
+            Self::InvalidSignature(key) => {
+                write!(f, "signature from key {key} is invalid")
+            }
+        }
+    }
+}
+
+impl Error for ManifestFileError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Read(error)
+            | Self::InvalidPublicKey { source: error, .. }
+            | Self::SignatureCheck { source: error, .. } => Some(error.as_ref()),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for OpenManifestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -173,36 +232,46 @@ impl OpenManifest {
         &self,
         db: &crate::pkiboo::Db,
         path: &PathBuf,
-    ) -> Result<Option<secrecy::SecretBox<Vec<u8>>>, Box<dyn Error>> {
+    ) -> Result<Option<secrecy::SecretBox<Vec<u8>>>, ManifestFileError> {
         if let Some(sfile) = self.current.lookup_file(path) {
             // Read the file from media
-            let data = secrecy::SecretBox::new(
-                Box::new(
-                    self.media.get(&path.to_string_lossy().to_string()).await?.ok_or::<String>(format!("File {} was found in the manifest but not present, run 'media repair' to attempt to repair this media", path.display()).into())?
-                ));
+            let data = self
+                .media
+                .get(&path.to_string_lossy().to_string())
+                .await
+                .map_err(ManifestFileError::Read)?
+                .ok_or(ManifestFileError::Missing)?;
+            let data = secrecy::SecretBox::new(Box::new(data));
 
-            let key = db.lookup_key(&sfile.key).ok_or::<String>(
-                format!(
-                    "File was signed by key {} which could not be found",
-                    sfile.key
-                )
-                .into(),
-            )?;
-            let pkey = key.load_public_key()?;
+            let key = db
+                .lookup_key(&sfile.key)
+                .ok_or_else(|| ManifestFileError::UnknownSigningKey(sfile.key.clone()))?;
+            let pkey = key.load_public_key().map_err(|source| {
+                ManifestFileError::InvalidPublicKey {
+                    key: sfile.key.clone(),
+                    source,
+                }
+            })?;
 
             let actual_hash = MultiHash::hash(sfile.hash.kind.clone(), data.expose_secret());
             if actual_hash != sfile.hash {
-                return Err(format!(
-                    "File contents do not match. Got hash {}, expected {}",
-                    actual_hash, sfile.hash
-                )
-                .into());
+                return Err(ManifestFileError::HashMismatch {
+                    expected: sfile.hash.to_string(),
+                    actual: actual_hash.to_string(),
+                });
             }
 
-            if sfile.verifies(&pkey)? {
+            let signature_valid = sfile.verifies(&pkey).map_err(|source| {
+                ManifestFileError::SignatureCheck {
+                    key: sfile.key.clone(),
+                    source,
+                }
+            })?;
+
+            if signature_valid {
                 Ok(Some(data))
             } else {
-                Err(format!("The signature for {} could not be verified", path.display()).into())
+                Err(ManifestFileError::InvalidSignature(sfile.key.clone()))
             }
         } else {
             Ok(None) // Not found in our manifest

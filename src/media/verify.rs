@@ -34,9 +34,41 @@ impl From<&MediaIssue> for IssueRow {
                 path,
                 "Path occurs more than once in the manifest",
             ),
-            MediaIssue::InvalidManifestEntry { path, message } => {
-                Self::with_path("invalid entry", path, message)
+            MediaIssue::UnreadableFile { path, message } => {
+                Self::with_path("unreadable file", path, message)
             }
+            MediaIssue::MissingFile { path } => {
+                Self::with_path("missing file", path, "File is named by the manifest")
+            }
+            MediaIssue::UnknownSigningKey { path, key } => Self::with_path(
+                "unknown signing key",
+                path,
+                &format!("Signed by unknown key {key}"),
+            ),
+            MediaIssue::InvalidSigningKey { path, key, message } => Self::with_path(
+                "invalid signing key",
+                path,
+                &format!("Could not load key {key}: {message}"),
+            ),
+            MediaIssue::HashMismatch {
+                path,
+                expected,
+                actual,
+            } => Self::with_path(
+                "hash mismatch",
+                path,
+                &format!("Expected {expected}; got {actual}"),
+            ),
+            MediaIssue::SignatureCheckFailed { path, key, message } => Self::with_path(
+                "signature check failed",
+                path,
+                &format!("Could not check signature from {key}: {message}"),
+            ),
+            MediaIssue::InvalidSignature { path, key } => Self::with_path(
+                "invalid signature",
+                path,
+                &format!("Signature from {key} is invalid"),
+            ),
             MediaIssue::MissingExpectedEntry { path, kind, name } => Self::with_path(
                 "missing expected entry",
                 path,
