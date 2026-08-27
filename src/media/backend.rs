@@ -10,6 +10,11 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 
+/// Serialize operations that may ask polkit to authenticate through the
+/// process-wide `pkttyagent`. Device discovery and media I/O do not hold this
+/// lock, so workers can still wait for and verify different media concurrently.
+static UDISKS_OPERATIONS: Mutex<()> = Mutex::const_new(());
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MediaAttachment {
     RemovableMedia,
@@ -169,6 +174,18 @@ impl Media for FileSystem {
             matches[0].clone()
         };
 
+        // UDisks operations are serialized because concurrent polkit prompts
+        // through a single pkttyagent interfere with one another. Everything
+        // above this point, including waiting for the device, remains
+        // concurrent.
+        let _udisks_operation = UDISKS_OPERATIONS.lock().await;
+
+        // Another waiter for this same backend may have mounted it while this
+        // waiter was queued for the UDisks lock.
+        if self.ready().await {
+            return Ok(());
+        }
+
         // TODO mounting backends
         let conn = zbus::Connection::system().await?;
         let manager = super::udisks::UDisksManagerProxy::new(&conn).await?;
@@ -217,6 +234,10 @@ impl Media for FileSystem {
         let object_path = mount
             .object_path
             .ok_or("Mounted media is missing its UDisks object path")?;
+
+        // Unmount can require the same polkit authentication as mount, so it
+        // participates in the same process-wide queue.
+        let _udisks_operation = UDISKS_OPERATIONS.lock().await;
         let connection = zbus::Connection::system().await?;
         let filesystem =
             super::udisks::UDisksFilesystemProxy::new(&connection, object_path).await?;
