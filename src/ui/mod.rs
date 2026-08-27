@@ -1,9 +1,13 @@
 use std::error::Error;
 
+pub mod keypair;
+
 pub trait Task {
     async fn set_message(&self, message: String);
     async fn mark_complete(&self);
     async fn mark_error(&self, message: String);
+
+    async fn start_task(&self, message: String) -> Self;
 
     fn property_list(&self, props: Vec<(String, String)>);
 }

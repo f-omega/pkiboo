@@ -6,7 +6,6 @@ use std::io::Read;
 use std::{collections::HashMap, path::{Path, PathBuf},
           sync::Arc,
           error::Error};
-use tokio::io::AsyncReadExt;
 use serde::{Serialize, Deserialize};
 use crate::util::Name;
 use crate::ui::{Ui, ListView};
@@ -127,6 +126,12 @@ impl Db {
         self.keys.iter().find(|n| n.name == *nm)
     }
 
+    pub fn lookup_key_by_public_key(&self, pkey: &openssl::pkey::PKey<openssl::pkey::Public>) -> Option<&Key> {
+        pkey.public_key_to_pem().ok()
+            .and_then(|pem| String::from_utf8(pem).ok())
+            .and_then(|pem| self.keys.iter().find(|n| n.public_key == pem))
+    }
+
     pub async fn backup(&self, media: Arc<dyn crate::media::backend::Media>) -> Result<(), Box<dyn Error>> {
         let s = yaml_serde::to_string(self)?;
         media.put(&DB_KEY.into(), &s.into_bytes()).await?;
@@ -233,7 +238,7 @@ pub struct Key {
 
     meta: Meta,
 
-    backups: Vec<Name<Media>>
+    pub backups: Vec<Name<Media>>
 }
 
 impl Key {

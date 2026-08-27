@@ -4,6 +4,7 @@ use crate::util::Name;
 use crate::cli_common::Duration;
 use crate::pkiboo::{Key, Root};
 use crate::ui::UiExt;
+use crate::ui::keypair::UiKeypairExt;
 
 #[derive(clap::Parser)]
 pub struct Args {
@@ -143,13 +144,16 @@ pub async fn main<Ui: crate::Ui>
     let csr = boo.ui().task("Create CSR".into(),
                             async |task| create_csr(boo, args, task, public_key.as_ref()).await ).await?;
 
+    let csr_public_key = csr.public_key()?;
+
     // Lookup private key coresponding to CSR
     let pkey = boo.ui().task("Load private key".into(),
                              async |task| {
-                                 db.lookup_key_by_public_key
+                                 Ok(db.lookup_key_by_public_key(&csr_public_key).ok_or::<String>("Could not identify public key this CSR is requesting".into())?)
                              }).await?;
 
-    // If this is a cert issuer, the public key must match
-    
+    // So now we have to load the private key explicitly
+    pkey.
+
     todo!("Sign CSR");
 }
