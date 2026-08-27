@@ -1,7 +1,5 @@
-use crate::cli_common;
 use crate::util::Name;
 use backend::{FileSystem, Media};
-use procfs::process::Process;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
@@ -88,11 +86,8 @@ impl MediaRef {
                     .media
                     .iter()
                     .find(|n| {
-                        if let MediaId::PhysicalMedia { fingerprint: f, .. } = &n.id {
-                            f == &info.fingerprint
-                        } else {
-                            false
-                        }
+                        let MediaId::PhysicalMedia { fingerprint: f, .. } = &n.id;
+                        f == &info.fingerprint
                     })
                     .ok_or::<String>(format!("Could not find media {}", self.media).into())?;
                 Ok(media.id.clone())
@@ -164,6 +159,7 @@ pub(crate) async fn main<Ui: crate::Ui>(
 
 // Items
 
+#[allow(dead_code)]
 pub(crate) trait MediaItem {
     /// Emoji icon for this item kind
     fn emoji(&self) -> &'static str;

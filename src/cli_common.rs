@@ -8,6 +8,7 @@ use crate::ui::{TaskId, TaskTree};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Duration {
+    #[allow(dead_code)]
     days: u32
 }
 
@@ -38,37 +39,10 @@ impl std::str::FromStr for Duration {
 }
 
 pub(crate) fn warn(msg: String) {
-    let WARNING = warning_style();
+    let warning = warning_style();
     if std::io::stderr().is_terminal() {
-        eprintln!("{WARNING}  ⚠️ {}{WARNING:#}", msg);
+        eprintln!("{warning}  ⚠️ {}{warning:#}", msg);
     }
-}
-
-pub(crate) fn task_list(msg: String) {
-    if std::io::stderr().is_terminal() {
-        eprintln!("✅ {}", msg);
-    }
-}
-
-pub(crate) fn make_progress_bar(num: u64) -> indicatif::ProgressBar {
-    let pb = indicatif::ProgressBar::new(num);
-    pb.set_style(
-        indicatif::ProgressStyle::with_template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos:>3}/{len:3} {msg}"
-        )
-        .unwrap()
-        .progress_chars("=>-"),
-    );
-
-    if !std::io::stderr().is_terminal() {
-        pb.set_draw_target(indicatif::ProgressDrawTarget::hidden());
-    };
-
-    pb
-}
-
-pub(crate) fn interactive() -> bool {
-    std::io::stdout().is_terminal()
 }
 
 pub struct CliBackend {
@@ -222,7 +196,7 @@ impl Ui for CliBackend {
 
     async fn ready(&self) {
         match self.ready.borrow_mut().wait_for(|r| *r).await {
-            Err(e) => panic!("Could not wait"),
+            Err(_) => panic!("Could not wait"),
             Ok(_) => ()
         }
     }

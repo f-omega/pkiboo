@@ -3,7 +3,7 @@ use itertools::Itertools;
 use openssl::pkey::{PKey, Private};
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
-use std::{error::Error, path::PathBuf};
+use std::error::Error;
 
 mod backups;
 mod cli;
@@ -171,7 +171,7 @@ impl Algorithm {
                     algo: self.clone(),
                 })
             }
-            Algorithm::ED25519(spec) => Ok(PrivateKey {
+            Algorithm::ED25519(_spec) => Ok(PrivateKey {
                 pkey: PKey::generate_ed25519()?,
                 algo: self.clone(),
             }),
@@ -184,7 +184,7 @@ impl std::fmt::Display for Algorithm {
         match self {
             Algorithm::RSA(spec) => write!(f, "{}-bit RSA", spec.bits),
             Algorithm::ECDSA(spec) => write!(f, "ECDSA curve {:?}", spec.curve),
-            Algorithm::ED25519(spec) => write!(f, "ED25519 curve"),
+            Algorithm::ED25519(_spec) => write!(f, "ED25519 curve"),
         }
     }
 }

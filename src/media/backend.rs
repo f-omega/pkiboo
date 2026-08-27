@@ -9,7 +9,6 @@ use std::any::Any;
 use async_trait::async_trait;
 use futures::StreamExt;
 use super::{MediaId, physical};
-use super::manifest::OpenManifest;
 
 pub struct MediaTrustDomain {
     pub removable: bool,
@@ -57,8 +56,7 @@ impl Media for FileSystem {
     }
 
     async fn setup(&self) -> Result<(), Box<dyn Error>> {
-        std::fs::create_dir_all(&self.base_path().await?)?;
-        Ok(())
+        self.create().await
     }
 
     async fn trust_domain(&self) -> Result<MediaTrustDomain, Box<dyn Error>> {

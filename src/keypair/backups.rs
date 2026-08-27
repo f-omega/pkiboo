@@ -11,10 +11,9 @@ pub struct Args {
 }
 
 pub(crate) async fn main<Ui: crate::Ui>(
-    boo: &crate::PkiBoo<Ui>,
-    keypair: &super::Args,
-    args: &Args,
+    _boo: &crate::PkiBoo<Ui>,
+    _keypair: &super::Args,
+    _args: &Args,
 ) -> Result<(), Box<dyn Error>> {
-    let mut db = boo.open_database()?;
     todo!()
 }

@@ -1,3 +1,5 @@
+#![allow(async_fn_in_trait)]
+
 use std::error::Error;
 use std::future::Future;
 
@@ -19,6 +21,7 @@ pub trait Task: TaskStarter<TaskHandle = Self> + Send + Sync + Clone {
     fn property_list(&self, props: Vec<(String, String)>);
 }
 
+#[allow(dead_code)]
 pub trait Progress {
     async fn set_progress(&self, progress: usize);
     async fn set_task(&self, task: &String);

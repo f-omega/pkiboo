@@ -23,7 +23,7 @@ pub struct Args {
 
 pub(crate) async fn main<Ui: crate::Ui>
     (boo: &crate::PkiBoo<Ui>,
-     keypair: &super::Args,
+     _keypair: &super::Args,
      create: &Args) -> Result<(), Box<dyn Error>>
 {
     let mut db = boo.open_database()?;

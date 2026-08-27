@@ -1,56 +1,116 @@
-use secrecy::ExposeSecret;
-use futures::future::try_join_all;
-use std::error::Error;
+use futures::stream::{FuturesUnordered, StreamExt};
 use openssl::pkey::{PKey, Private};
-use crate::{media::OpenManifest, pkiboo::{Key, OpenedDb}, util::Name};
+use secrecy::ExposeSecret;
+use std::error::Error;
+
+use crate::{
+    media::OpenManifest,
+    pkiboo::{Key, OpenedDb},
+    util::Name,
+};
+
 use super::{Task, TaskStarterExt};
 
-pub trait UiKeypairExt : Task {
+#[allow(dead_code)]
+pub trait UiKeypairExt: Task {
+    /// Load a private key from the first complete copy that becomes available.
+    ///
+    /// One child task waits on each known backup. Once a valid copy is read,
+    /// the remaining child tasks are cancelled and allowed to finish before
+    /// this method returns.
+    async fn load_private_key(
+        &self,
+        db: &OpenedDb,
+        key_id: &Name<Key>,
+    ) -> Result<PKey<Private>, Box<dyn Error>> {
+        let key = db
+            .lookup_key(key_id)
+            .ok_or::<String>("Could not find key".into())?;
+        if key.backups.is_empty() {
+            return Err(format!("Key {key_id} has no complete copies").into());
+        }
 
-    /// Load a private key from any media it's available on
-    async fn load_private_key(&self, db: &OpenedDb, key_id: &Name<Key>) -> Result<PKey<Private>, Box<dyn Error>> {
-        let key = db.lookup_key(key_id).ok_or::<String>("Could not find key".into())?;
         let cancel = tokio_util::sync::CancellationToken::new();
-        let (send_key, mut rx_key) = tokio::sync::watch::channel(None);
-
         let private_key_path = key.key_path();
-        let mut waiters = Vec::new();
-        for nm in &key.backups {
-            let handle = tokio::spawn(async {
-                let _ =
-                    self.task(format!("Wait for media {nm} to come online").into(),
-                          async |online| {
-                              let media = db.lookup_media(&nm).ok_or::<String>(format!("Media {} not found in db", nm).into())?;
-                              let backend = media.id.open_backend().await?;
-                              backend.wait_for_available().await?;
+        let mut waiters = FuturesUnordered::new();
 
-                              // Once available, we can open the manifest, verify and read the key
-                              let manifest = OpenManifest::new(backend.clone()).await?;
+        for media_name in key.backups.iter().cloned() {
+            let worker_cancel = cancel.child_token();
+            let private_key_path = private_key_path.clone();
 
-                              match manifest.read_verified(&db, &private_key_path).await? {
-                                  None => online.set_message(format!("Media {} does not seem to contain this key", media.id).into()).await,
-                                  Some(bytes) => send_key.send(Some((nm, bytes)))?
-                              };
-                              Ok(())
-                          }).await;
+            waiters.push(async move {
+                let task_media_name = media_name.clone();
+                let result = self
+                    .task(
+                        format!("Wait for media {media_name} to come online"),
+                        move |online| async move {
+                            let load = async {
+                                let media = db.lookup_media(&task_media_name).ok_or::<String>(
+                                    format!("Media {task_media_name} not found in db").into(),
+                                )?;
+                                let backend = media.id.open_backend().await?;
+                                backend.wait_for_available().await?;
+
+                                let manifest = OpenManifest::new(backend).await?;
+                                match manifest.read_verified(db, &private_key_path).await? {
+                                    None => {
+                                        online
+                                            .set_message(format!(
+                                                "Media {} does not contain this key",
+                                                media.id
+                                            ))
+                                            .await;
+                                        Ok(None)
+                                    }
+                                    Some(bytes) => Ok(Some(bytes)),
+                                }
+                            };
+
+                            tokio::select! {
+                                _ = worker_cancel.cancelled() => {
+                                    online.set_message("Cancelled after another copy was loaded".into()).await;
+                                    Ok(None)
+                                }
+                                result = load => result,
+                            }
+                        },
+                    )
+                    .await;
+
+                result.map(|bytes| bytes.map(|bytes| (media_name, bytes)))
             });
-            waiters.push(handle);
-        };
+        }
 
-        match rx_key.changed().await {
-            Err(_) => return Err::<PKey<Private>, Box<dyn Error>>("No key was able to be retrieved".into()),
-            Ok(_) => {
-                let (media, bytes) = rx_key.borrow_and_update().unwrap();
-                self.set_message(format!("Read private key from {}", media).into()).await;
-                // Read private key from PEM
-                match openssl::pkey::PKey::private_key_from_pem(bytes.expose_secret()) {
-                    Err(_) => {
-                        self.mark_error(format!("The key was successfully read and verified from {}, but OpenSSL could not read it", media).into()).await;
-                        Err("Could not read private key from media".into())
-                    },
-                    Ok(key) => Ok(key)
+        let mut last_error = None;
+        while let Some(result) = waiters.next().await {
+            match result {
+                Ok(Some((media, bytes))) => {
+                    cancel.cancel();
+
+                    // Poll the losing workers so they observe cancellation and
+                    // their UI tasks reach a terminal state.
+                    while waiters.next().await.is_some() {}
+
+                    self.set_message(format!("Read private key from {media}"))
+                        .await;
+                    return match PKey::private_key_from_pem(bytes.expose_secret()) {
+                        Ok(key) => Ok(key),
+                        Err(error) => {
+                            self.mark_error(format!(
+                                "The key was verified from {media}, but OpenSSL could not read it: {error}"
+                            ))
+                            .await;
+                            Err("Could not read private key from media".into())
+                        }
+                    };
                 }
+                Ok(None) => {}
+                Err(error) => last_error = Some(error),
             }
         }
+
+        Err(last_error.unwrap_or_else(|| "No complete key copy could be loaded".into()))
     }
 }
+
+impl<T: Task> UiKeypairExt for T {}

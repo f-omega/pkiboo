@@ -1,5 +1,4 @@
 use std::error::Error;
-use crate::ui::{TaskStarterExt, Task};
 
 #[derive(clap::Parser)]
 pub struct Args {
@@ -24,16 +23,7 @@ pub struct Args {
     ignore_extra_files: bool
 }
 
-pub async fn main<Ui: crate::Ui>(boo: &crate::pkiboo::PkiBoo<Ui>, media: &super::Args, args: &Args) -> Result<(), Box<dyn Error>> {
-    let db = boo.open_database()?;
-    let media_id = args.media_spec.resolve(&db)?;
-
-    let mut media = boo.ui().task(format!("Opening media {}", media_id).into(),
-                                  async |task| {
-                                      let m = media_id.open_backend().await?;
-                                      task.set_message(format!("Opened media {}", media_id).into());
-                                      Ok(m)
-                                  });
+pub async fn main<Ui: crate::Ui>(_boo: &crate::pkiboo::PkiBoo<Ui>, _media: &super::Args, _args: &Args) -> Result<(), Box<dyn Error>> {
 
     // Get the existing manifest
 //    boo.ui().task(format!("Repairing media {}", media_id).into(),

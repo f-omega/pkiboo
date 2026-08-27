@@ -41,6 +41,6 @@ pub async fn main<Ui: crate::Ui>(
             Ok(())
         },
     )])
-    .await;
+    .await?;
     Ok(())
 }

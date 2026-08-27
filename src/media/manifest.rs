@@ -19,11 +19,7 @@ impl Manifest {
         Manifest { files: Vec::new() }
     }
 
-    fn len(&self) -> usize {
-        self.files.len()
-    }
-
-    pub fn lookup_file(&self, path: &PathBuf) -> Option<&SignedFile> {
+    fn lookup_file(&self, path: &PathBuf) -> Option<&SignedFile> {
         self.files.iter().find(|l| &l.path == path)
     }
 }
@@ -65,6 +61,7 @@ impl SignedFile {
         })
     }
 
+    #[allow(dead_code)]
     fn verifies(&self, key: &openssl::pkey::PKey<openssl::pkey::Public>) -> Result<bool, Box<dyn Error>> {
         let nonce = Self::nonce(&self.path, self.hash.to_string());
         let verifier = openssl::sign::Verifier::new(crate::keypair::signing_message_digest(),
@@ -119,6 +116,7 @@ impl OpenManifest {
     /// Returns the bytes in a secret box or None if the file could not be found.
     ///
     /// Otherwise returns an error.
+    #[allow(dead_code)]
     pub async fn read_verified(&self, db: &crate::pkiboo::Db, path: &PathBuf) -> Result<Option<secrecy::SecretBox<Vec<u8>>>, Box<dyn Error>> {
         if let Some(sfile) = self.current.lookup_file(path) {
             // Read the file from media

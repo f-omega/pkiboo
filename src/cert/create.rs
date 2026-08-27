@@ -1,7 +1,6 @@
 use crate::cli_common::Duration;
 use crate::pkiboo::{Cert, Key};
 use crate::ui::TaskStarterExt;
-use crate::ui::keypair::UiKeypairExt;
 use crate::util::Name;
 use openssl::pkey::{PKey, Public};
 use std::error::Error;
@@ -105,9 +104,9 @@ impl Args {
 }
 
 async fn create_csr<Ui: crate::Ui>(
-    boo: &crate::pkiboo::PkiBoo<Ui>,
+    _boo: &crate::pkiboo::PkiBoo<Ui>,
     args: &Args,
-    task: Ui::TaskHandle,
+    _task: Ui::TaskHandle,
     public_key: Option<&PKey<Public>>,
 ) -> Result<openssl::x509::X509Req, Box<dyn Error>> {
     let cli_csr = match public_key {
@@ -115,7 +114,7 @@ async fn create_csr<Ui: crate::Ui>(
         Some(key) => args.make_csr(key),
     };
     match (cli_csr, &args.csr) {
-        (Ok(None), Some(csr_file)) => {
+        (Ok(None), Some(_csr_file)) => {
             todo!("Load csr");
         }
         (Ok(Some(_)), Some(_)) => Err("Either --csr or certificate details must be given".into()),
@@ -129,14 +128,13 @@ async fn create_csr<Ui: crate::Ui>(
 
 pub async fn main<Ui: crate::Ui>(
     boo: &crate::pkiboo::PkiBoo<Ui>,
-    cert: &super::Args,
+    _cert: &super::Args,
     args: &Args,
 ) -> Result<(), Box<dyn Error>> {
     let db = boo.open_database()?;
     let public_key = boo
         .ui()
-        .task("Find Key".into(), async |task| {
-            if let Some(issuer) = &args.by {};
+        .task("Find Key".into(), async |_task| {
             if let Some(key) = &args.key {
                 let pem = db
                     .lookup_key(key)
@@ -160,8 +158,8 @@ pub async fn main<Ui: crate::Ui>(
     let csr_public_key = csr.public_key()?;
 
     // Lookup private key coresponding to CSR
-    let pkey = boo.ui().task("Load private key".into(),
-                             async |task| {
+    let _pkey = boo.ui().task("Load private key".into(),
+                             async |_task| {
                                  Ok(db.lookup_key_by_public_key(&csr_public_key).ok_or::<String>("Could not identify public key this CSR is requesting".into())?)
                              }).await?;
 

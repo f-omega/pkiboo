@@ -1,5 +1,4 @@
 use std::error::Error;
-use clap::ArgGroup;
 use crate::ui::{TaskStarterExt, Task};
 use crate::util::Name;
 use crate::pkiboo::Media;
@@ -72,7 +71,7 @@ impl CreateSpec {
 
 pub(crate) async fn main<Ui: crate::Ui>
     (boo: &crate::PkiBoo<Ui>,
-     media: &super::Args,
+     _media: &super::Args,
      create: &Args) -> Result<(), Box<dyn Error>>
 {
     // Verify that the media is appropriate.

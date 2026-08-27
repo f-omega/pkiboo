@@ -52,7 +52,7 @@ impl PkiBoo<CliBackend> {
         let db_path = std::path::Path::new(&path).resolve().to_path_buf();
 
         if std::io::stdin().is_terminal() {
-            let (ready_tx, mut ready_rx) = tokio::sync::watch::channel(false);
+            let (ready_tx, ready_rx) = tokio::sync::watch::channel(false);
             tokio::spawn(async move {
                 use std::process::Stdio;
                 use tokio::process::Command;
@@ -554,12 +554,14 @@ pub enum MetaCommand {
 }
 
 // Traits
+#[allow(dead_code)]
 pub trait Entity: Any {
     fn kind(&self) -> &'static str;
     fn emoji(&self) -> &'static str;
     fn name(&self) -> &String;
 }
 
+#[allow(dead_code)]
 pub trait PrivateEntity: Entity {
     /// private entities can be backed up to media and should be able to tell us where they are
     fn backups(&self) -> Vec<Name<Media>>;
@@ -601,6 +603,7 @@ impl PrivateEntity for Key {
 
 // Impls
 impl Db {
+    #[allow(dead_code)]
     fn entities(&self) -> impl Iterator<Item = &dyn Entity> {
         itertools::chain!(
             self.keys.iter().map(|x| x as &dyn Entity),
@@ -608,10 +611,12 @@ impl Db {
         )
     }
 
+    #[allow(dead_code)]
     fn private_entities(&self) -> impl Iterator<Item = &dyn PrivateEntity> {
         itertools::chain!(self.keys.iter().map(|x| x as &dyn PrivateEntity))
     }
 
+    #[allow(dead_code)]
     fn find_media_entities(&self, media: &Name<Media>) -> impl Iterator<Item = &dyn PrivateEntity> {
         self.private_entities()
             .filter(|e| e.backups().contains(media))
