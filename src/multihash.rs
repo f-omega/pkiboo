@@ -3,7 +3,7 @@ use std::fmt::Display;
 
 use openssl::hash::{hash, MessageDigest};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) enum HashAlgorithm {
     SHA256,
     SHA512
@@ -52,7 +52,7 @@ impl HashAlgorithm {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct MultiHash {
     kind: HashAlgorithm,
     hex_encoded: String
@@ -64,7 +64,7 @@ impl MultiHash {
     }
 
     pub(crate) fn valid(&self) -> Result<(), Box<dyn Display>> {
-        let len = self.kind.size();
+        let len = self.kind.size() * 2;
         if self.hex_encoded.len() != len {
             return Err(Box::<String>::new(format!("Algorithm {} expects {} hex digits, but got {}", self.kind.to_string(), len, self.hex_encoded.len()).into()));
         };
@@ -74,14 +74,24 @@ impl MultiHash {
         Ok(())
     }
 
-    pub(crate) fn with_default_algo(b: impl Into<Vec<u8>>) -> Self {
+    pub(crate) fn with_default_algo<'a>(b: impl Into<&'a Vec<u8>>) -> Self {
         Self::hash(HashAlgorithm::default_algo(), b)
     }
 
-    pub(crate) fn hash(algo: HashAlgorithm, b: impl Into<Vec<u8>>) -> Self {
-        let h = hash(algo.message_digest(), &b.into()).unwrap();
+    pub(crate) fn hash<'a>(algo: HashAlgorithm, b: impl Into<&'a Vec<u8>>) -> Self {
+        let h = hash(algo.message_digest(), b.into()).unwrap();
         let hex_encoded = h.iter().map(|c| format!("{:02x}", *c as u32)).collect::<String>();
         Self { kind: algo, hex_encoded }
+    }
+
+    pub(crate) fn check<'a>(&self, b: impl Into<&'a Vec<u8>>) -> bool {
+        MultiHash::hash(self.kind.clone(), b) == *self
+    }
+}
+
+impl ToString for MultiHash {
+    fn to_string(&self) -> String {
+        format!("{}:{}", self.kind.to_string(), self.hex_encoded)
     }
 }
 
@@ -89,7 +99,7 @@ impl Serialize for MultiHash {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer {
-        format!("{}:{}", self.kind.to_string(), self.hex_encoded).serialize(serializer)
+        self.to_string().serialize(serializer)
     }
 }
 

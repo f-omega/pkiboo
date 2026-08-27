@@ -1,0 +1,125 @@
+use std::error::Error;
+use std::path::PathBuf;
+use serde::{Serialize, Deserialize};
+use std::sync::Arc;
+use secrecy::ExposeSecret;
+use super::backend::Media;
+use crate::multihash::MultiHash;
+use crate::util::Name;
+use crate::pkiboo::Key;
+
+/// A manifest is something that lists all files on this media.
+#[derive(Serialize, Deserialize)]
+pub struct Manifest {
+    files: Vec<SignedFile>
+}
+
+impl Manifest {
+    fn empty() -> Self {
+        Manifest { files: Vec::new() }
+    }
+
+    fn len(&self) -> usize {
+        self.files.len()
+    }
+
+    pub fn lookup_file(&self, path: &PathBuf) -> Option<&SignedFile> {
+        self.files.iter().find(|l| &l.path == path)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct SignedFile {
+    /// Path relative to the PKI directory
+    path: PathBuf,
+
+    /// Hash of this file
+    hash: MultiHash,
+
+    /// Signature of this hash against the private key it's testifying to
+    signature: crate::keypair::Signature,
+
+    /// Name of the key this is testified to
+    key: Name<Key>
+}
+
+impl SignedFile {
+    fn sign(path: PathBuf,
+            key: &crate::keypair::LoadedKey,
+            contents: &secrecy::SecretBox<Vec<u8>>) -> Result<SignedFile, Box<dyn Error>> {
+        let hash = MultiHash::with_default_algo(contents.expose_secret());
+        let mut nonce = hash.to_string();
+        nonce.push('\0');
+        nonce.push_str(&path.to_string_lossy().to_string());
+        let signature = key.pkey.sign(secrecy::SecretBox::new(Box::new(nonce.into())))?;
+        Ok(SignedFile {
+            path,
+            hash,
+            signature,
+            key: key.key.name.clone(),
+        })
+    }
+}
+
+/// A manifest that is being modified from a particular media
+pub struct OpenManifest {
+    media: Arc<dyn Media>,
+    current: Manifest,
+}
+
+impl std::ops::Deref for OpenManifest {
+    type Target = Manifest;
+
+    fn deref(&self) -> &Self::Target {
+        &self.current
+    }
+}
+
+impl std::ops::DerefMut for OpenManifest {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.current
+    }
+}
+
+static MANIFEST_KEY: &'static str = "manifest.yaml";
+impl OpenManifest {
+    pub async fn new(media: Arc<dyn Media>) -> Result<Self, Box<dyn Error>> {
+        match media.get(&MANIFEST_KEY.into()).await {
+            Ok(Some(contents)) => {
+                let current = yaml_serde::from_slice(&contents)?;
+                Ok(OpenManifest { media: media.clone(), current })
+            },
+            Ok(None) => {
+                Ok(OpenManifest { media: media.clone(), current: Manifest::empty() })
+            },
+            Err(e) => Err(e)
+        }
+    }
+
+    pub async fn save(&self) -> Result<(), Box<dyn Error>> {
+        let s =  yaml_serde::to_string(&self.current)?;
+        self.media.put(&MANIFEST_KEY.into(), &s.into_bytes()).await?;
+        Ok(())
+    }
+
+    /// Write a file into the manifest. The file is written immediately, but the manifest is not.
+    ///
+    /// This will fail if the file already exists in the manifest and the contents
+    /// do not hash to the same thing
+    pub async fn write_file(&mut self, file: PathBuf, key: &crate::keypair::LoadedKey,
+                            contents: secrecy::SecretBox<Vec<u8>>) -> Result<(), Box<dyn Error>> {
+        if let Some(existing) = self.current.lookup_file(&file) {
+            if !existing.hash.check(contents.expose_secret()) {
+                return Err(format!("File {} already exists and its contents do not match", file.display()).into())
+            }
+            Ok(())
+        } else {
+            let sfile = SignedFile::sign(file.clone(), &key, &contents)?;
+            self.current.files.push(sfile);
+
+            self.media.put(&file.to_string_lossy().to_string(), contents.expose_secret()).await?;
+
+            Ok(())
+        }
+    }
+}

@@ -56,6 +56,10 @@
             rust
             pkgs.rust-analyzer
             pkgs.pkg-config
+            pkgs.claude-code
+
+            pkgs.codex
+            pkgs.codex-acp
           ];
           buildInputs = [
             pkgs.openssl.dev
