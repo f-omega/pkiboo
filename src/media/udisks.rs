@@ -26,6 +26,12 @@ pub trait UDisksFilesystem {
         options: std::collections::HashMap<&str, zbus::zvariant::Value<'_>>,
     ) -> zbus::Result<String>;
 
+    #[zbus(name = "Unmount")]
+    fn unmount(
+        &self,
+        options: std::collections::HashMap<&str, zbus::zvariant::Value<'_>>,
+    ) -> zbus::Result<()>;
+
     #[zbus(property, name = "MountPoints")]
     fn mount_points(&self) -> zbus::Result<Vec<Vec<u8>>>;
 }

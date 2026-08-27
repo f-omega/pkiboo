@@ -24,9 +24,10 @@ pkiboo
 │   │   List managed certificates, including their issuer relationships and
 │   │   current status.
 │   │
-│   ├── show
+│   ├── show --cert <cert> [--pem]
 │   │   Show a certificate's subject, issuer, serial, fingerprint, validity,
 │   │   associated key, policy, and status.
+│   │   With --pem, print only the PEM-encoded public certificate.
 │   │
 │   ├── export
 │   │   Export a public certificate in PEM or DER form.
@@ -50,11 +51,12 @@ pkiboo
 │   ├── list
 │   │   List managed keys and their availability and recoverability state.
 │   │
-│   ├── show
+│   ├── show --key <key> [--pem]
 │   │   Show a key's fingerprint, public information, complete copies,
 │   │   recovery splits, and health.
+│   │   With --pem, print only the PEM-encoded public key.
 │   │
-│   ├── backup
+│   ├── backup --key <key> --media <destination-media>
 │   │   Make another complete copy of a key directly from its current media
 │   │   to explicitly selected destination media.
 │   │

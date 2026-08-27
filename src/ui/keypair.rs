@@ -3,6 +3,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use openssl::pkey::{PKey, Private};
 use secrecy::ExposeSecret;
 use std::error::Error;
+use std::sync::Arc;
 
 use crate::{
     media::OpenManifest,
@@ -11,6 +12,12 @@ use crate::{
 };
 
 use super::{Task, TaskStarterExt};
+
+pub struct LoadedPrivateKey {
+    pub private_key: PKey<Private>,
+    pub media: Name<crate::pkiboo::Media>,
+    pub backend: Arc<dyn crate::media::backend::Media>,
+}
 
 #[allow(dead_code)]
 #[async_trait(?Send)]
@@ -25,6 +32,19 @@ pub trait UiKeypairExt: Task {
         db: &OpenedDb,
         key_id: &Name<Key>,
     ) -> Result<PKey<Private>, Box<dyn Error>> {
+        Ok(self
+            .load_private_key_with_source(db, key_id)
+            .await?
+            .private_key)
+    }
+
+    /// Load a private key and retain the winning source medium so a workflow
+    /// can release it before asking for another medium.
+    async fn load_private_key_with_source(
+        &self,
+        db: &OpenedDb,
+        key_id: &Name<Key>,
+    ) -> Result<LoadedPrivateKey, Box<dyn Error>> {
         let key = db
             .lookup_key(key_id)
             .ok_or::<String>("Could not find key".into())?;
@@ -53,7 +73,7 @@ pub trait UiKeypairExt: Task {
                                 let backend = media.id.open_backend().await?;
                                 backend.wait_for_available().await?;
 
-                                let manifest = OpenManifest::new(backend).await?;
+                                let manifest = OpenManifest::new(backend.clone()).await?;
                                 match manifest.read_verified(db, &private_key_path).await? {
                                     None => {
                                         online
@@ -64,7 +84,7 @@ pub trait UiKeypairExt: Task {
                                             .await;
                                         Ok(None)
                                     }
-                                    Some(bytes) => Ok(Some(bytes)),
+                                    Some(bytes) => Ok(Some((bytes, backend))),
                                 }
                             };
 
@@ -79,14 +99,14 @@ pub trait UiKeypairExt: Task {
                     )
                     .await;
 
-                result.map(|bytes| bytes.map(|bytes| (media_name, bytes)))
+                result.map(|loaded| loaded.map(|(bytes, backend)| (media_name, bytes, backend)))
             });
         }
 
         let mut last_error = None;
         while let Some(result) = waiters.next().await {
             match result {
-                Ok(Some((media, bytes))) => {
+                Ok(Some((media, bytes, backend))) => {
                     cancel.cancel();
 
                     // Poll the losing workers so they observe cancellation and
@@ -96,7 +116,11 @@ pub trait UiKeypairExt: Task {
                     self.set_message(format!("Read private key from {media}"))
                         .await;
                     return match PKey::private_key_from_pem(bytes.expose_secret()) {
-                        Ok(key) => Ok(key),
+                        Ok(private_key) => Ok(LoadedPrivateKey {
+                            private_key,
+                            media,
+                            backend,
+                        }),
                         Err(error) => {
                             self.mark_error(format!(
                                 "The key was verified from {media}, but OpenSSL could not read it: {error}"

@@ -47,8 +47,19 @@ tasks. It presents backend-neutral property lists and tabular list models.
 Domain concepts such as media backups remain outside this trait; a Pkiboo
 extension translates those concepts into generic presentation models.
 
-`Ui` extends `TaskStarter` and `Presenter` and additionally provides `ready`,
-which waits until the backend is ready.
+`PaneStarter` is the common presentation-grouping capability shared by UIs and
+tasks. `start_pane` exposes a pane handle, while the `PaneStarterExt::pane`
+helper mirrors the task helper by passing that handle into an async operation
+and finalizing the pane afterward. A pane has a title and implements
+`Presenter`, but deliberately has no progress or terminal state.
+
+Pane operations may run concurrently. The CLI assigns panes creation-order
+identities, buffers their structured output independently, and flushes complete
+panes in that order. A graphical backend can instead expose all panes at once
+as cards, panels, or tabs and populate each as its operation produces output.
+
+`Ui` extends `TaskStarter`, `PaneStarter`, and `Presenter` and additionally
+provides `ready`, which waits until the backend is ready.
 
 A `Task` handle can:
 
@@ -56,6 +67,7 @@ A `Task` handle can:
 - mark itself complete;
 - mark itself failed with an error message;
 - mark itself cancelled;
+- create presentation-only panes;
 - present property lists and tabular lists through `Presenter`.
 
 `TaskStarterExt` extends `TaskStarter`, rather than `Ui`, so its `task` helper works on
