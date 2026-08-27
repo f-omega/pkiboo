@@ -3,6 +3,7 @@
 pub mod keypair;
 mod task;
 
+pub use keypair::*;
 pub use task::*;
 
 // pub trait Prompt {

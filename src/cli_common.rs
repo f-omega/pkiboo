@@ -8,8 +8,13 @@ use crate::ui::{TaskId, TaskTree};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Duration {
-    #[allow(dead_code)]
     days: u32
+}
+
+impl Duration {
+    pub(crate) fn days(self) -> u32 {
+        self.days
+    }
 }
 
 fn warning_style() -> Style {
