@@ -3,6 +3,7 @@ use crate::pkiboo::Media;
 use crate::ui::{Task, TaskStarterExt};
 use crate::util::Name;
 use std::error::Error;
+use std::path::PathBuf;
 
 /// Create and set up a new removable media
 #[derive(clap::Parser)]
@@ -41,11 +42,11 @@ impl Args {
 struct CreateLocal {
     /// Mount point of device
     #[arg(long, required_unless_present = "device", conflicts_with = "device")]
-    path: Option<String>,
+    path: Option<PathBuf>,
 
     /// Block device to identify and mount through UDisks
     #[arg(long, required_unless_present = "path", conflicts_with = "path")]
-    device: Option<String>,
+    device: Option<PathBuf>,
 
     /// Don't require that the media be able to be identified
     #[arg(long)]
@@ -69,14 +70,13 @@ impl CreateSpec {
             Local(local) => {
                 let (device_info, path) = match (&local.path, &local.device) {
                     (Some(path), None) => {
-                        let path = std::path::Path::new(path);
                         (
                             super::physical::get_device_info(path)?,
-                            Some(path.to_path_buf()),
+                            Some(path.clone()),
                         )
                     }
                     (None, Some(device)) => (
-                        super::physical::get_device_info_from_device(std::path::Path::new(device))?,
+                        super::physical::get_device_info_from_device(device)?,
                         None,
                     ),
                     _ => return Err("Exactly one of --path or --device is required".into()),

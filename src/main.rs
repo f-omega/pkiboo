@@ -26,7 +26,7 @@ pub struct CliOptions {
     command: Command,
 
     #[arg(long)]
-    db_path: Option<String>,
+    db_path: Option<std::path::PathBuf>,
 }
 
 #[derive(clap::Subcommand)]

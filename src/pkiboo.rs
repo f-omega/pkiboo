@@ -44,8 +44,8 @@ impl PkiBoo<CliBackend> {
         let path = options
             .db_path
             .clone()
-            .unwrap_or("~/.pkiboo/db.yaml".into());
-        let db_path = std::path::Path::new(&path).resolve().to_path_buf();
+            .unwrap_or_else(|| PathBuf::from("~/.pkiboo/db.yaml"));
+        let db_path = path.resolve().to_path_buf();
 
         if std::io::stdin().is_terminal() {
             let (ready_tx, ready_rx) = tokio::sync::watch::channel(false);

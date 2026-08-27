@@ -9,6 +9,7 @@ use openssl::pkey::{Id, PKey, Private, Public};
 use openssl::x509::extension::{BasicConstraints, KeyUsage, SubjectKeyIdentifier};
 use openssl::x509::{X509, X509Req};
 use std::error::Error;
+use std::path::PathBuf;
 
 #[derive(clap::Parser)]
 pub struct Args {
@@ -22,7 +23,7 @@ pub struct Args {
 
     /// CSR file to use instead of command lines or interactive questioning
     #[arg(long)]
-    csr: Option<String>,
+    csr: Option<PathBuf>,
 
     /// Issuing certificate to use
     #[arg(long)]
