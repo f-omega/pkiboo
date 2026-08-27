@@ -1,4 +1,4 @@
-use crate::media::backend::Media as MediaBackend;
+use crate::media::backend::{Media as MediaBackend, ReleaseResult};
 use crate::pkiboo::Media;
 use crate::ui::{ListItem, ListView, PaneStarterExt, Presenter, Task};
 use crate::util::Name;
@@ -153,31 +153,72 @@ async fn back_up_one<T: Task>(
     let release = backend.release().await;
 
     match (result, release) {
-        (None, _) => {
-            task.mark_cancelled("Another destination completed or backup was interrupted".into())
+        (None, Ok(release)) => {
+            let detail = match release {
+                ReleaseResult::Released => "cancelled; safely unmounted".into(),
+                ReleaseResult::ExternalMount(path) => format!(
+                    "cancelled; unmount {} before removing media",
+                    path.display()
+                ),
+                ReleaseResult::NotMounted => "cancelled; media released".into(),
+            };
+            task.mark_cancelled(detail.clone()).await;
+            BackupResult {
+                media: media.clone(),
+                status: "not backed up",
+                detail,
+            }
+        }
+        (None, Err(error)) => {
+            task.mark_error(format!("Cancelled, but could not release media: {error}"))
                 .await;
             BackupResult {
                 media: media.clone(),
                 status: "not backed up",
-                detail: "cancelled".into(),
+                detail: format!("cancelled; could not release media: {error}"),
             }
         }
-        (Some(Ok(())), Ok(_)) => {
-            task.set_message(format!("Database backed up to {media}"))
+        (Some(Ok(())), Ok(release)) => {
+            let detail = match release {
+                ReleaseResult::Released => "database written; safely unmounted".into(),
+                ReleaseResult::ExternalMount(path) => format!(
+                    "database written; unmount {} before removing media",
+                    path.display()
+                ),
+                ReleaseResult::NotMounted => "database written; media released".into(),
+            };
+            task.set_message(format!("Database backed up to {media}; {detail}"))
                 .await;
             task.mark_complete().await;
             BackupResult {
                 media: media.clone(),
                 status: "backed up",
-                detail: "database recovery hint written".into(),
+                detail,
             }
         }
-        (Some(Err(error)), _) | (Some(Ok(())), Err(error)) => {
-            task.mark_error(error.to_string()).await;
+        (Some(Ok(())), Err(error)) => {
+            task.mark_error(format!(
+                "Database written, but media could not be released: {error}"
+            ))
+            .await;
+            BackupResult {
+                media: media.clone(),
+                status: "backed up",
+                detail: format!("database written; could not release media: {error}"),
+            }
+        }
+        (Some(Err(error)), release) => {
+            let detail = match release {
+                Ok(_) => error.to_string(),
+                Err(release_error) => {
+                    format!("{error}; media could not be released: {release_error}")
+                }
+            };
+            task.mark_error(detail.clone()).await;
             BackupResult {
                 media: media.clone(),
                 status: "failed",
-                detail: error.to_string(),
+                detail,
             }
         }
     }
