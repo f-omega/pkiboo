@@ -80,14 +80,18 @@ pub(crate) async fn main<Ui: crate::Ui>
     }
 
     let committer = {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Name<Media>>(4);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(
+            Name<Media>,
+            chrono::DateTime<chrono::Utc>,
+        )>(4);
         let committer = {
             let key_name = loaded.key.name.clone();
             tokio::spawn(async move {
-                while let Some(media_name) = rx.recv().await {
+                while let Some((media_name, verified_at)) = rx.recv().await {
                     let mut tx = db.transaction();
                     let mut key = tx.lookup_key(&key_name).unwrap().clone();
-                    key.add_backup(media_name);
+                    key.add_backup(media_name.clone());
+                    key.record_verification(media_name, verified_at);
                     let _ = tx.update_key(key); // Should always work 
                 }
             })
@@ -105,7 +109,7 @@ pub(crate) async fn main<Ui: crate::Ui>
 
                               manifest.save().await?;
 
-                              tx.send(m.label.clone()).await?;
+                              tx.send((m.label.clone(), chrono::Utc::now())).await?;
 
                               task.set_message(format!("Key written to {}", m.id).into()).await;
                               Ok(())

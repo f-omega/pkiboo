@@ -301,6 +301,10 @@ pub struct Key {
     pub meta: Meta,
 
     pub backups: Vec<Name<Media>>,
+
+    /// Most recent successful verification of each complete copy.
+    #[serde(default)]
+    pub verifications: Vec<PrivateEntityVerification>,
 }
 
 impl Key {
@@ -310,6 +314,7 @@ impl Key {
             algorithm,
             meta: Meta::new(),
             backups: Vec::new(),
+            verifications: Vec::new(),
             public_key,
         }
     }
@@ -318,6 +323,14 @@ impl Key {
         if !self.backups.contains(&media) {
             self.backups.push(media)
         }
+    }
+
+    pub fn record_verification(
+        &mut self,
+        media: Name<Media>,
+        verified_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        record_verification(&mut self.verifications, media, verified_at);
     }
 
     pub fn key_path(&self) -> PathBuf {
@@ -440,6 +453,34 @@ pub struct Split {
     pub meta: Meta,
 
     backups: Vec<Name<Media>>,
+
+    /// Most recent successful verification of each stored share.
+    #[serde(default)]
+    pub verifications: Vec<PrivateEntityVerification>,
+}
+
+/// The most recent successful verification of one private entity on one
+/// medium. Failed attempts are operational events, not evidence that an older
+/// successful verification did not occur, so they do not replace this record.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PrivateEntityVerification {
+    pub media: Name<Media>,
+    pub verified_at: chrono::DateTime<chrono::Utc>,
+}
+
+fn record_verification(
+    verifications: &mut Vec<PrivateEntityVerification>,
+    media: Name<Media>,
+    verified_at: chrono::DateTime<chrono::Utc>,
+) {
+    if let Some(existing) = verifications
+        .iter_mut()
+        .find(|verification| verification.media == media)
+    {
+        existing.verified_at = verified_at;
+    } else {
+        verifications.push(PrivateEntityVerification { media, verified_at });
+    }
 }
 
 struct MetaEntry {
@@ -581,6 +622,9 @@ pub trait Entity: Any {
 pub trait PrivateEntity: Entity {
     /// private entities can be backed up to media and should be able to tell us where they are
     fn backups(&self) -> &[Name<Media>];
+
+    /// Most recent successful verification for each stored copy or share.
+    fn verifications(&self) -> &[PrivateEntityVerification];
 }
 
 impl Entity for Key {
@@ -615,6 +659,10 @@ impl PrivateEntity for Key {
     fn backups(&self) -> &[Name<Media>] {
         &self.backups
     }
+
+    fn verifications(&self) -> &[PrivateEntityVerification] {
+        &self.verifications
+    }
 }
 
 impl Entity for Split {
@@ -634,6 +682,10 @@ impl Entity for Split {
 impl PrivateEntity for Split {
     fn backups(&self) -> &[Name<Media>] {
         &self.backups
+    }
+
+    fn verifications(&self) -> &[PrivateEntityVerification] {
+        &self.verifications
     }
 }
 

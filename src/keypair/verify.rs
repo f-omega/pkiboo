@@ -16,12 +16,17 @@ pub struct Args {
     /// Media to verify; repeat to select more than one (defaults to all complete copies)
     #[arg(long)]
     media: Vec<Name<Media>>,
+
+    /// Verify copies without recording successful results in the database
+    #[arg(long)]
+    no_store: bool,
 }
 
 struct VerificationResult {
-    media: String,
+    media: Name<Media>,
     status: &'static str,
     detail: String,
+    verified_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl ListItem for VerificationResult {
@@ -31,7 +36,7 @@ impl ListItem for VerificationResult {
 
     fn get_field(&self, column: usize) -> String {
         match column {
-            0 => self.media.clone(),
+            0 => self.media.to_string(),
             1 => self.status.into(),
             2 => self.detail.clone(),
             _ => String::new(),
@@ -76,7 +81,7 @@ pub async fn main<Ui: crate::Ui>(
     _key: &super::Args,
     args: &Args,
 ) -> Result<(), Box<dyn Error>> {
-    let db = boo.open_database()?;
+    let mut db = boo.open_database()?;
     let key = db
         .lookup_key(&args.key)
         .ok_or_else(|| format!("Key {} not found", args.key))?
@@ -126,9 +131,10 @@ pub async fn main<Ui: crate::Ui>(
                         return (
                             index,
                             VerificationResult {
-                                media: medium.label.to_string(),
+                                media: medium.label.clone(),
                                 status: "failed",
                                 detail: error.to_string(),
+                                verified_at: None,
                             },
                         );
                     }
@@ -139,29 +145,34 @@ pub async fn main<Ui: crate::Ui>(
                         let _ = backend.release().await;
                         task.mark_cancelled("Interrupted".into()).await;
                         (index, VerificationResult {
-                            media: medium.label.to_string(),
+                            media: medium.label.clone(),
                             status: "not verified",
                             detail: "interrupted".into(),
+                            verified_at: None,
                         })
                     }
                     verification = verify_copy(&db, &key, backend.clone()) => {
                         match verification {
                             Ok(()) => match release(&backend).await {
                                 Ok(detail) => {
+                                    let verified_at = chrono::Utc::now();
                                     task.set_message(detail.clone()).await;
                                     task.mark_complete().await;
                                     (index, VerificationResult {
-                                        media: medium.label.to_string(),
+                                        media: medium.label.clone(),
                                         status: "verified",
                                         detail,
+                                        verified_at: Some(verified_at),
                                     })
                                 }
                                 Err(error) => {
+                                    let verified_at = chrono::Utc::now();
                                     task.mark_error(error.to_string()).await;
                                     (index, VerificationResult {
-                                        media: medium.label.to_string(),
+                                        media: medium.label.clone(),
                                         status: "failed",
                                         detail: format!("Verified copy, but could not release media: {error}"),
+                                        verified_at: Some(verified_at),
                                     })
                                 }
                             }
@@ -169,9 +180,10 @@ pub async fn main<Ui: crate::Ui>(
                                 let _ = backend.release().await;
                                 task.mark_error(error.to_string()).await;
                                 (index, VerificationResult {
-                                    media: medium.label.to_string(),
+                                    media: medium.label.clone(),
                                     status: "failed",
                                     detail: error.to_string(),
+                                    verified_at: None,
                                 })
                             }
                         }
@@ -202,6 +214,16 @@ pub async fn main<Ui: crate::Ui>(
         .map(|result| result.expect("every verification worker returns a result"))
         .collect::<Vec<_>>();
     let failed = results.iter().any(|result| result.status == "failed");
+
+    if !args.no_store {
+        let mut updated_key = key.clone();
+        for result in &results {
+            if let Some(verified_at) = result.verified_at {
+                updated_key.record_verification(result.media.clone(), verified_at);
+            }
+        }
+        db.transaction().update_key(updated_key)?;
+    }
 
     boo.ui()
         .pane(

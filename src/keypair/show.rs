@@ -6,6 +6,27 @@ use openssl::hash::{MessageDigest, hash};
 use std::error::Error;
 use std::io::Write;
 
+struct CompleteCopy {
+    media: String,
+    trusted: bool,
+    last_verified: String,
+}
+
+impl crate::ui::ListItem for CompleteCopy {
+    fn column_names() -> &'static [&'static str] {
+        &["media", "trusted", "last verified"]
+    }
+
+    fn get_field(&self, column: usize) -> String {
+        match column {
+            0 => self.media.clone(),
+            1 => self.trusted.to_string(),
+            2 => self.last_verified.clone(),
+            _ => String::new(),
+        }
+    }
+}
+
 #[derive(clap::Args)]
 pub struct Args {
     /// Name of the key
@@ -59,7 +80,16 @@ pub async fn main<Ui: crate::Ui>(
         .media
         .iter()
         .filter(|media| key.backups.contains(&media.label))
-        .cloned()
+        .map(|media| CompleteCopy {
+            media: media.label.to_string(),
+            trusted: media.trusted,
+            last_verified: key
+                .verifications
+                .iter()
+                .find(|verification| verification.media == media.label)
+                .map(|verification| verification.verified_at.to_rfc3339())
+                .unwrap_or_else(|| "never".into()),
+        })
         .collect::<Vec<_>>();
     let copies = boo.ui().pane(
         "Complete copies".into(),

@@ -117,7 +117,7 @@ pub(crate) async fn main<Ui: crate::Ui>(
                           use super::backend::MediaAttachment;
 
                           match device_info.attachment {
-                              MediaAttachment::RemovableMedia => {}
+                              MediaAttachment::RemovableMedia => {} // Always allowed
                               MediaAttachment::ExternalBus if create.allow_external_bus => {}
                               MediaAttachment::ExternalBus => {
                                   return Err(format!(

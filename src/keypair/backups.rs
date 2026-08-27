@@ -135,7 +135,8 @@ pub(crate) async fn main<Ui: crate::Ui>(
     release_result?;
 
     let mut updated_key = key;
-    updated_key.add_backup(destination.label);
+    updated_key.add_backup(destination.label.clone());
+    updated_key.record_verification(destination.label, chrono::Utc::now());
     db.transaction().update_key(updated_key)?;
 
     Ok(())

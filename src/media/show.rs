@@ -6,11 +6,12 @@ struct ExpectedEntity {
     emoji: String,
     kind: String,
     name: String,
+    last_verified: String,
 }
 
 impl crate::ui::ListItem for ExpectedEntity {
     fn column_names() -> &'static [&'static str] {
-        &["", "kind", "name"]
+        &["", "kind", "name", "last verified"]
     }
 
     fn get_field(&self, column: usize) -> String {
@@ -18,6 +19,7 @@ impl crate::ui::ListItem for ExpectedEntity {
             0 => self.emoji.clone(),
             1 => self.kind.clone(),
             2 => self.name.clone(),
+            3 => self.last_verified.clone(),
             _ => String::new(),
         }
     }
@@ -52,6 +54,12 @@ pub async fn main<Ui: crate::Ui>(
             emoji: entity.emoji().to_owned(),
             kind: entity.kind().to_owned(),
             name: entity.name().clone(),
+            last_verified: entity
+                .verifications()
+                .iter()
+                .find(|verification| verification.media == media.label)
+                .map(|verification| verification.verified_at.to_rfc3339())
+                .unwrap_or_else(|| "never".into()),
         })
         .collect::<Vec<_>>();
 
