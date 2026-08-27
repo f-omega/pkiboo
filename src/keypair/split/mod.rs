@@ -3,7 +3,7 @@ use std::error::Error;
 mod create;
 mod list;
 mod meta;
-mod retire;
+mod reconstruct;
 mod show;
 mod verify;
 
@@ -25,8 +25,8 @@ enum Command {
     Verify(verify::Args),
     /// Manage metadata on a recovery split
     Meta(meta::Args),
-    /// Retire a recovery split
-    Retire(retire::Args),
+    /// Reconstruct a key from shares, including shares not recorded locally
+    Reconstruct(reconstruct::Args),
 }
 
 pub async fn main<Ui: crate::Ui>(
@@ -40,6 +40,6 @@ pub async fn main<Ui: crate::Ui>(
         Command::Show(command) => show::main(boo, args, command).await,
         Command::Verify(command) => verify::main(boo, args, command).await,
         Command::Meta(command) => meta::main(boo, args, command).await,
-        Command::Retire(command) => retire::main(boo, args, command).await,
+        Command::Reconstruct(command) => reconstruct::main(boo, args, command).await,
     }
 }

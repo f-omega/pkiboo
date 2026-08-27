@@ -155,6 +155,13 @@ impl Db {
         self.splits.iter().find(|n| n.label == *nm)
     }
 
+    /// Iterate over the splits belonging to one managed key.
+    pub fn splits_for_key(&self, key: &Name<Key>) -> impl Iterator<Item = &Split> {
+        self.splits
+            .iter()
+            .filter(move |split| &split.key == key)
+    }
+
     /// Write a non-authoritative snapshot that may help reconstruct local
     /// state after loss. The local database remains authoritative during
     /// ordinary operation; snapshots on different media may be stale.
@@ -672,6 +679,33 @@ pub struct SplitVerification {
     pub shares: Vec<SplitBackup>,
 }
 
+/// Current verification state for one numbered share placement.
+pub struct SplitSharePlacementStatus {
+    pub share: ShareNumber,
+    pub media: Name<Media>,
+    pub last_verified: Option<chrono::DateTime<chrono::Utc>>,
+    pub current: bool,
+}
+
+impl crate::ui::ListItem for SplitSharePlacementStatus {
+    fn column_names() -> &'static [&'static str] {
+        &["share", "media", "last verified", "verification"]
+    }
+
+    fn get_field(&self, column: usize) -> String {
+        match column {
+            0 => self.share.0.to_string(),
+            1 => self.media.to_string(),
+            2 => self
+                .last_verified
+                .map(|date| date.to_rfc3339())
+                .unwrap_or_else(|| "never".into()),
+            3 => if self.current { "current" } else { "needed" }.into(),
+            _ => String::new(),
+        }
+    }
+}
+
 /// Successful verification remains current for one quarter. This is a policy
 /// constant rather than stored state: changing the policy immediately
 /// reevaluates every private copy from its durable verification timestamp.
@@ -762,6 +796,33 @@ impl Split {
 
     pub fn has_recovery_quorum(&self) -> bool {
         self.distinct_backup_count() >= self.min_splits as usize
+    }
+
+    /// Build the presentation-independent verification listing for every
+    /// numbered share placement. A placement is current when any successful
+    /// reconstruction containing that exact share and medium is fresh.
+    pub fn share_placement_statuses_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Vec<SplitSharePlacementStatus> {
+        let cutoff = now - chrono::Duration::days(VERIFICATION_MAX_AGE_DAYS);
+        self.backups
+            .iter()
+            .map(|backup| {
+                let last_verified = self
+                    .verifications
+                    .iter()
+                    .filter(|verification| verification.shares.contains(backup))
+                    .map(|verification| verification.verified_at)
+                    .max();
+                SplitSharePlacementStatus {
+                    share: backup.share,
+                    media: backup.media.clone(),
+                    last_verified,
+                    current: last_verified.is_some_and(|date| date >= cutoff),
+                }
+            })
+            .collect()
     }
 }
 
