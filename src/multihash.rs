@@ -54,7 +54,7 @@ impl HashAlgorithm {
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct MultiHash {
-    kind: HashAlgorithm,
+    pub kind: HashAlgorithm,
     hex_encoded: String
 }
 

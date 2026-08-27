@@ -329,6 +329,17 @@ impl Key {
             self.backups.push(media)
         }
     }
+
+    pub fn key_path(&self) -> PathBuf {
+        PathBuf::new()
+            .join("keys")
+            .join(self.name.to_string())
+            .join("private.pem")
+    }
+
+    pub fn load_public_key(&self) -> Result<openssl::pkey::PKey<openssl::pkey::Public>, Box<dyn Error>> {
+        Ok(openssl::pkey::PKey::public_key_from_pem(self.public_key.as_bytes())?)
+    }
 }
 
 impl crate::ui::ListItem for Key {

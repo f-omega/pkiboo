@@ -25,6 +25,11 @@ pub struct Signature {
     bytes: Vec<u8>,
 }
 
+/// Return default message digest
+pub fn signing_message_digest() -> openssl::hash::MessageDigest {
+    openssl::hash::MessageDigest::sha512()
+}
+
 impl PrivateKey {
     fn serialize_to_pem(&self) -> Result<secrecy::SecretBox<[u8]>, Box<dyn Error>> {
         let pem = self.pkey.private_key_to_pem_pkcs8()?;
@@ -32,8 +37,7 @@ impl PrivateKey {
     }
 
     pub fn sign(&self, data: secrecy::SecretBox<Vec<u8>>) -> Result<Signature, Box<dyn Error>> {
-        use openssl::hash::MessageDigest;
-        let mut signer = openssl::sign::Signer::new(MessageDigest::sha512(), &self.pkey)?;
+        let mut signer = openssl::sign::Signer::new(signing_message_digest(), &self.pkey)?;
         signer.update(data.expose_secret())?;
         let bytes = signer.sign_to_vec()?;
         Ok(Signature { bytes })
@@ -105,12 +109,6 @@ impl LoadedKey {
         LoadedKey { pkey, key }
     }
 
-    pub fn key_path(&self) -> PathBuf {
-        PathBuf::new()
-            .join("keys")
-            .join(self.key.name.to_string())
-            .join("private.pem")
-    }
 
     pub async fn save_to_media(
         &self,
@@ -119,7 +117,7 @@ impl LoadedKey {
         let secret = secrecy::SecretBox::new(Box::new(
             self.pkey.serialize_to_pem()?.expose_secret().to_vec(),
         ));
-        mf.write_file(self.key_path(), self, secret).await
+        mf.write_file(self.key.key_path(), self, secret).await
     }
 }
 
