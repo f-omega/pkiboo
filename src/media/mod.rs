@@ -15,7 +15,6 @@ mod list;
 mod meta;
 mod repair;
 mod show;
-mod sync;
 mod verify;
 
 pub mod backend;
@@ -116,9 +115,6 @@ enum Command {
     /// Inspect currently attached physical media without modifying it
     Inspect(inspect::Args),
 
-    /// Synchronize public metadata and certificates onto media
-    Sync(sync::Args),
-
     /// Verify material stored on media
     Verify(verify::Args),
 
@@ -143,7 +139,6 @@ pub(crate) async fn main<Ui: crate::Ui>(
         Command::Create(c) => create::main(boo, args, c).await,
         Command::List(c) => list::main(boo, args, c).await,
         Command::Inspect(c) => inspect::main(boo, args, c).await,
-        Command::Sync(c) => sync::main(boo, args, c).await,
         Command::Verify(c) => verify::main(boo, args, c).await,
         Command::Meta(c) => meta::main(boo, args, c).await,
         Command::Repair(c) => repair::main(boo, args, c).await,

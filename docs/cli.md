@@ -10,6 +10,11 @@ operator-defined classifications are ordinary metadata.
 
 ```text
 pkiboo
+├── backup [--media <media>...] [--single]
+│   Copy the current non-authoritative database recovery hint to selected
+│   media. Without --media, wait for every registered medium. With --single,
+│   stop after the first available destination succeeds.
+│
 ├── status
 │   Show a concise health summary: certificates, key recoverability, media
 │   status, stale verifications, and warnings.
@@ -108,9 +113,6 @@ pkiboo
 │   │   Inspect and classify currently attached physical media without
 │   │   mounting, registering, or modifying it. --all includes fixed, system,
 │   │   and untrusted media and notes anything already registered.
-│   │
-│   ├── sync
-│   │   Synchronize public metadata and certificates onto the medium.
 │   │
 │   ├── verify
 │   │   Read back and validate all pkiboo material expected on the medium.

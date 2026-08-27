@@ -2,6 +2,7 @@ use clap::Parser;
 
 mod cert;
 mod cli_common;
+mod backup;
 mod keypair;
 mod media;
 mod multihash;
@@ -45,6 +46,9 @@ enum Command {
     /// Inspect and manage printable recovery artifacts
     Paper(paper::Args),
 
+    /// Copy the database recovery hint onto one or more media
+    Backup(backup::Args),
+
 }
 
 #[tokio::main]
@@ -59,6 +63,7 @@ async fn main() {
         Command::Key(args) => keypair::main(&pkiboo, args).await,
         Command::Cert(args) => cert::main(&pkiboo, args).await,
         Command::Paper(args) => paper::main(&pkiboo, args).await,
+        Command::Backup(args) => backup::main(&pkiboo, args).await,
     };
 
     match result {
