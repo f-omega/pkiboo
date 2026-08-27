@@ -45,6 +45,7 @@ struct CreateLocal {
 
 #[derive(clap::Subcommand, Clone)]
 enum CreateSpec {
+    /// Initialize a physical filesystem as pkiboo media
     Local(CreateLocal),
 //    S3(
 }

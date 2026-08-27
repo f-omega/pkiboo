@@ -1,23 +1,31 @@
-use std::{error::Error, path::{Path, PathBuf}, sync::Arc};
-use serde::{Serialize, Deserialize};
-use procfs::process::Process;
 use crate::cli_common;
 use crate::util::Name;
 use backend::{FileSystem, Media};
+use procfs::process::Process;
+use serde::{Deserialize, Serialize};
+use std::{
+    error::Error,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 mod create;
-mod repair;
+mod forget;
+mod inspect;
 mod list;
 mod meta;
+mod repair;
+mod retire;
 mod show;
+mod sync;
+mod verify;
 
-mod physical;
-mod manifest;
 pub mod backend;
+mod manifest;
+mod physical;
 pub mod udisks;
 
 pub use manifest::OpenManifest;
-
 
 #[derive(PartialEq, Clone, Serialize, Deserialize)]
 pub enum MediaId {
@@ -26,14 +34,16 @@ pub enum MediaId {
         fingerprint: physical::PhysicalFingerprint,
 
         #[serde(skip)]
-        path: Option<PathBuf>
-    }
+        path: Option<PathBuf>,
+    },
 }
 
 impl std::fmt::Display for MediaId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MediaId::PhysicalMedia{ fingerprint: fp, .. } => fp.fmt(f)
+            MediaId::PhysicalMedia {
+                fingerprint: fp, ..
+            } => fp.fmt(f),
         }
     }
 }
@@ -41,7 +51,10 @@ impl std::fmt::Display for MediaId {
 impl MediaId {
     pub async fn open_backend(&self) -> Result<Arc<dyn Media>, Box<dyn Error>> {
         match self {
-            MediaId::PhysicalMedia{ fingerprint: fp, path: mount_point } => {
+            MediaId::PhysicalMedia {
+                fingerprint: fp,
+                path: mount_point,
+            } => {
                 let mut fs = FileSystem::new(fp.clone());
                 if let Some(p) = mount_point {
                     fs = fs.with_path(p.clone());
@@ -71,13 +84,17 @@ impl MediaRef {
             Some(media) => Ok(media.id.clone()),
             None => {
                 let info = physical::get_device_info(&Path::new(&self.media))?;
-                let media = db.media.iter().find(|n| {
-                    if let MediaId::PhysicalMedia{ fingerprint: f, .. } = &n.id {
-                        f == &info.fingerprint
-                    } else {
-                        false
-                    }
-                }).ok_or::<String>(format!("Could not find media {}", self.media).into())?;
+                let media = db
+                    .media
+                    .iter()
+                    .find(|n| {
+                        if let MediaId::PhysicalMedia { fingerprint: f, .. } = &n.id {
+                            f == &info.fingerprint
+                        } else {
+                            false
+                        }
+                    })
+                    .ok_or::<String>(format!("Could not find media {}", self.media).into())?;
                 Ok(media.id.clone())
             }
         }
@@ -91,7 +108,7 @@ pub(crate) struct Args {
 }
 
 #[derive(clap::Subcommand)]
-enum Command  {
+enum Command {
     /// Create a new media from a removable device
     Create(create::Args),
 
@@ -101,6 +118,15 @@ enum Command  {
     /// Show detailed information about media
     Show(show::Args),
 
+    /// Inspect discoverable media without modifying it
+    Inspect(inspect::Args),
+
+    /// Synchronize public metadata and certificates onto media
+    Sync(sync::Args),
+
+    /// Verify material stored on media
+    Verify(verify::Args),
+
     /// Repair a disk that may have been wiped
     Repair(repair::Args),
 
@@ -109,16 +135,30 @@ enum Command  {
 
     /// Rename the medium
     Rename(meta::Rename),
+
+    /// Retire media from service
+    Retire(retire::Args),
+
+    /// Forget media that should no longer count toward recoverability
+    Forget(forget::Args),
 }
 
-pub(crate) async fn main<Ui: crate::Ui>(boo: &crate::pkiboo::PkiBoo<Ui>, args: &Args) -> Result<(), Box<dyn Error>> {
+pub(crate) async fn main<Ui: crate::Ui>(
+    boo: &crate::pkiboo::PkiBoo<Ui>,
+    args: &Args,
+) -> Result<(), Box<dyn Error>> {
     match &args.command {
         Command::Create(c) => create::main(boo, args, c).await,
         Command::List(c) => list::main(boo, args, c).await,
+        Command::Inspect(c) => inspect::main(boo, args, c).await,
+        Command::Sync(c) => sync::main(boo, args, c).await,
+        Command::Verify(c) => verify::main(boo, args, c).await,
         Command::Meta(c) => meta::main(boo, args, c).await,
         Command::Repair(c) => repair::main(boo, args, c).await,
         Command::Rename(c) => meta::rename(boo, args, c).await,
-        Command::Show(c) => show::main(boo, args, c).await
+        Command::Show(c) => show::main(boo, args, c).await,
+        Command::Retire(c) => retire::main(boo, args, c).await,
+        Command::Forget(c) => forget::main(boo, args, c).await,
     }
 }
 

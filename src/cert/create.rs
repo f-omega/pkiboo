@@ -1,10 +1,10 @@
-use std::error::Error;
-use openssl::pkey::{PKey, Public};
-use crate::util::Name;
 use crate::cli_common::Duration;
-use crate::pkiboo::{Key, Root};
+use crate::pkiboo::{Cert, Key};
 use crate::ui::UiExt;
 use crate::ui::keypair::UiKeypairExt;
+use crate::util::Name;
+use openssl::pkey::{PKey, Public};
+use std::error::Error;
 
 #[derive(clap::Parser)]
 pub struct Args {
@@ -17,14 +17,12 @@ pub struct Args {
     csr: Option<String>,
 
     // Cert creation options
-
     /// Issuing certificate to use
     #[arg(long)]
-    by: Option<Name<Root>>,
-
+    by: Option<Name<Cert>>,
 
     /// Desired certificate validity
-    #[arg(long, default_value="1y")]
+    #[arg(long, default_value = "1y")]
     validity: Duration,
 
     /// Common Name (CN)
@@ -49,16 +47,19 @@ pub struct Args {
 
     /// Locality (L)
     #[arg(long)]
-    locality: Option<String>
+    locality: Option<String>,
 }
 
 impl Args {
-    fn make_csr(&self, public_key: &PKey<Public>)
-                -> Result<Option<openssl::x509::X509Req>, Box<dyn Error>> {
-        use openssl::x509::extension::{BasicConstraints,
-                                       KeyUsage};
+    fn make_csr(
+        &self,
+        public_key: &PKey<Public>,
+    ) -> Result<Option<openssl::x509::X509Req>, Box<dyn Error>> {
+        use openssl::x509::extension::{BasicConstraints, KeyUsage};
         let name = self.make_x509_name()?;
-        if name.entries().count() == 0 { return Ok(None); } // No name was given
+        if name.entries().count() == 0 {
+            return Ok(None);
+        } // No name was given
 
         let mut builder = openssl::x509::X509ReqBuilder::new()?;
         builder.set_version(0)?; // X509 v3
@@ -67,10 +68,13 @@ impl Args {
 
         let mut extensions = openssl::stack::Stack::new()?;
         extensions.push(BasicConstraints::new().critical().ca().build()?)?;
-        extensions.push(KeyUsage::new().critical()
-                        .key_cert_sign()
-                        .crl_sign()
-                        .build()?)?;
+        extensions.push(
+            KeyUsage::new()
+                .critical()
+                .key_cert_sign()
+                .crl_sign()
+                .build()?,
+        )?;
 
         builder.add_extensions(&extensions)?;
         Ok(Some(builder.build()))
@@ -100,49 +104,58 @@ impl Args {
     }
 }
 
-async fn create_csr<Ui: crate::Ui>
-    (boo: &crate::pkiboo::PkiBoo<Ui>,
-     args: &Args,
-     task: Ui::TaskHandle,
-     public_key: Option<&PKey<Public>>)
-     -> Result<openssl::x509::X509Req, Box<dyn Error>>
-{
+async fn create_csr<Ui: crate::Ui>(
+    boo: &crate::pkiboo::PkiBoo<Ui>,
+    args: &Args,
+    task: Ui::TaskHandle,
+    public_key: Option<&PKey<Public>>,
+) -> Result<openssl::x509::X509Req, Box<dyn Error>> {
     let cli_csr = match public_key {
         None => Ok(None),
-        Some(key) => args.make_csr(key)
+        Some(key) => args.make_csr(key),
     };
     match (cli_csr, &args.csr) {
         (Ok(None), Some(csr_file)) => {
             todo!("Load csr");
-        },
+        }
         (Ok(Some(_)), Some(_)) => Err("Either --csr or certificate details must be given".into()),
         (Ok(None), None) => {
             todo!("We can't yet prompt for CSR details")
-        },
+        }
         (Ok(Some(csr)), None) => Ok(csr),
         (Err(e), _) => Err(e),
     }
 }
 
-pub async fn main<Ui: crate::Ui>
-    (boo: &crate::pkiboo::PkiBoo<Ui>,
-     cert: &super::Args,
-     args: &Args) -> Result<(), Box<dyn Error>>
-{
+pub async fn main<Ui: crate::Ui>(
+    boo: &crate::pkiboo::PkiBoo<Ui>,
+    cert: &super::Args,
+    args: &Args,
+) -> Result<(), Box<dyn Error>> {
     let db = boo.open_database()?;
-    let public_key =
-        boo.ui().task("Find Key".into(),
-                      async |task| {
-                          if let Some(issuer) = &args.by {
-                          };
-                          if let Some(key) = &args.key {
-                              let pem = db.lookup_key(key).ok_or(format!("Could not find key {key}"))?.public_key.clone();
-                              return Ok(Some(openssl::pkey::PKey::public_key_from_pem(pem.as_bytes())?));
-                          };
-                          Ok(None)
-                      }).await?;
-    let csr = boo.ui().task("Create CSR".into(),
-                            async |task| create_csr(boo, args, task, public_key.as_ref()).await ).await?;
+    let public_key = boo
+        .ui()
+        .task("Find Key".into(), async |task| {
+            if let Some(issuer) = &args.by {};
+            if let Some(key) = &args.key {
+                let pem = db
+                    .lookup_key(key)
+                    .ok_or(format!("Could not find key {key}"))?
+                    .public_key
+                    .clone();
+                return Ok(Some(openssl::pkey::PKey::public_key_from_pem(
+                    pem.as_bytes(),
+                )?));
+            };
+            Ok(None)
+        })
+        .await?;
+    let csr = boo
+        .ui()
+        .task("Create CSR".into(), async |task| {
+            create_csr(boo, args, task, public_key.as_ref()).await
+        })
+        .await?;
 
     let csr_public_key = csr.public_key()?;
 
@@ -151,9 +164,6 @@ pub async fn main<Ui: crate::Ui>
                              async |task| {
                                  Ok(db.lookup_key_by_public_key(&csr_public_key).ok_or::<String>("Could not identify public key this CSR is requesting".into())?)
                              }).await?;
-
-    // So now we have to load the private key explicitly
-    pkey.
 
     todo!("Sign CSR");
 }

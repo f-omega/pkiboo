@@ -1,6 +1,10 @@
+use crate::cli_common::CliBackend;
+use crate::ui::{ListView, Ui};
+use crate::util::Name;
 use itertools::Itertools;
-use std::any::Any;
 use resolve_path::PathResolveExt;
+use serde::{Deserialize, Serialize};
+use std::any::Any;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::{collections::HashMap, path::{Path, PathBuf},
@@ -11,33 +15,49 @@ use crate::util::Name;
 use crate::ui::{Ui, ListView};
 use crate::cli_common::CliBackend;
 use std::os::fd::AsRawFd;
+use std::{
+    collections::HashMap,
+    error::Error,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 pub struct PkiBoo<UiBackend> {
     db_path: PathBuf,
-    ui_backend: UiBackend
+    ui_backend: UiBackend,
 }
 
 impl<UiBackend: Ui> PkiBoo<UiBackend> {
-    pub fn ui(&self) -> &UiBackend { &self.ui_backend }
+    pub fn ui(&self) -> &UiBackend {
+        &self.ui_backend
+    }
 
     pub fn open_database(&self) -> Result<OpenedDb, Box<dyn Error>> {
         match std::fs::read_to_string(&self.db_path) {
             Ok(contents) => {
                 let db = yaml_serde::from_str(&contents)?;
-                Ok(OpenedDb { db, db_path: self.db_path.clone() })
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Ok(OpenedDb { db: Db::empty(), db_path: self.db_path.clone() })
-            },
-            Err(e) => Err(Box::new(e))
+                Ok(OpenedDb {
+                    db,
+                    db_path: self.db_path.clone(),
+                })
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(OpenedDb {
+                db: Db::empty(),
+                db_path: self.db_path.clone(),
+            }),
+            Err(e) => Err(Box::new(e)),
         }
     }
 }
 
 impl PkiBoo<CliBackend> {
     pub fn from_cli_opts(options: &crate::CliOptions) -> PkiBoo<CliBackend> {
-        let path = options.db_path.clone().unwrap_or("~/.pkiboo/db.yaml".into());
+        let path = options
+            .db_path
+            .clone()
+            .unwrap_or("~/.pkiboo/db.yaml".into());
         let db_path = std::path::Path::new(&path).resolve().to_path_buf();
 
         if std::io::stdin().is_terminal() {
@@ -52,7 +72,8 @@ impl PkiBoo<CliBackend> {
                 let bfd = writer.as_raw_fd();
 
                 let mut agent = Command::new("pkttyagent");
-                agent.arg("--process")
+                agent
+                    .arg("--process")
                     .arg(pid.to_string())
                     .arg("--notify-fd")
                     .arg("3")
@@ -72,7 +93,6 @@ impl PkiBoo<CliBackend> {
                 let mut agent = agent.spawn()?;
                 drop(writer);
 
-
                 let mut buf: [u8; 1] = [0u8];
                 let _ = reader.read_exact(&mut buf); // Doesn't matter how it ends, but whichever way it does, we were notified
 
@@ -80,12 +100,14 @@ impl PkiBoo<CliBackend> {
 
                 agent.wait().await
             });
-            PkiBoo { db_path, ui_backend: CliBackend::new(ready_rx) }
+            PkiBoo {
+                db_path,
+                ui_backend: CliBackend::new(ready_rx),
+            }
         } else {
             panic!("Can't run non-interactively yet");
         }
     }
-
 }
 
 /// The database of everything we know about
@@ -94,24 +116,26 @@ pub struct Db {
     /// Keypairs
     pub keys: Vec<Key>,
 
-    /// Root CAs
-    pub roots: Vec<Root>,
+    /// Certificates
+    pub certs: Vec<Cert>,
 
     /// Splits
     pub splits: Vec<Split>,
 
     /// Backend media
-    pub media: Vec<Media>
+    pub media: Vec<Media>,
 }
 
-static DB_KEY : &'static str = "db.yaml";
+static DB_KEY: &'static str = "db.yaml";
 
 impl Db {
     fn empty() -> Self {
-        Db { keys: Vec::new(),
-             roots: Vec::new(),
-             splits: Vec::new(),
-             media: Vec::new() }
+        Db {
+            keys: Vec::new(),
+            certs: Vec::new(),
+            splits: Vec::new(),
+            media: Vec::new(),
+        }
     }
 
     pub fn lookup_media(&self, nm: &Name<Media>) -> Option<&Media> {
@@ -132,7 +156,18 @@ impl Db {
             .and_then(|pem| self.keys.iter().find(|n| n.public_key == pem))
     }
 
-    pub async fn backup(&self, media: Arc<dyn crate::media::backend::Media>) -> Result<(), Box<dyn Error>> {
+    pub fn lookup_cert(&self, nm: &Name<Cert>) -> Option<&Cert> {
+        self.certs.iter().find(|n| n.name == *nm)
+    }
+
+    pub fn lookup_split(&self, nm: &Name<Split>) -> Option<&Split> {
+        self.splits.iter().find(|n| n.label == *nm)
+    }
+
+    pub async fn backup(
+        &self,
+        media: Arc<dyn crate::media::backend::Media>,
+    ) -> Result<(), Box<dyn Error>> {
         let s = yaml_serde::to_string(self)?;
         media.put(&DB_KEY.into(), &s.into_bytes()).await?;
         Ok(())
@@ -141,7 +176,7 @@ impl Db {
 
 pub struct OpenedDb {
     db: Db,
-    db_path: PathBuf
+    db_path: PathBuf,
 }
 
 impl std::ops::Deref for OpenedDb {
@@ -155,7 +190,11 @@ impl std::ops::Deref for OpenedDb {
 impl OpenedDb {
     pub fn transaction<'a>(&'a mut self) -> DbTx<'a> {
         let copy = self.db.clone();
-        DbTx { db: self, copy, failed: false }
+        DbTx {
+            db: self,
+            copy,
+            failed: false,
+        }
     }
 
     fn write(&self) -> Result<(), Box<dyn Error>> {
@@ -171,7 +210,7 @@ impl OpenedDb {
 pub struct DbTx<'a> {
     db: &'a mut OpenedDb,
     copy: Db,
-    failed: bool
+    failed: bool,
 }
 
 impl<'a> std::ops::Deref for DbTx<'a> {
@@ -198,12 +237,46 @@ impl<'a> std::ops::Drop for DbTx<'a> {
 }
 
 impl<'a> DbTx<'a> {
-    pub fn add_key(&mut self, key: Key ) {
+    pub fn add_key(&mut self, key: Key) {
         self.keys.push(key)
+    }
+
+    pub fn add_cert(&mut self, cert: Cert) {
+        self.certs.push(cert)
     }
 
     pub fn add_media(&mut self, m: Media) {
         self.media.push(m)
+    }
+
+    pub fn update_cert(&mut self, mut cert: Cert) -> Result<Cert, Box<dyn Error>> {
+        match self
+            .certs
+            .iter()
+            .enumerate()
+            .find(|(_, n)| n.name == cert.name)
+        {
+            None => Err(format!("Certificate {} does not exist", cert.name).into()),
+            Some((i, _)) => {
+                std::mem::swap(&mut self.certs[i], &mut cert);
+                Ok(cert)
+            }
+        }
+    }
+
+    pub fn update_split(&mut self, mut split: Split) -> Result<Split, Box<dyn Error>> {
+        match self
+            .splits
+            .iter()
+            .enumerate()
+            .find(|(_, n)| n.label == split.label)
+        {
+            None => Err(format!("Split {} does not exist", split.label).into()),
+            Some((i, _)) => {
+                std::mem::swap(&mut self.splits[i], &mut split);
+                Ok(split)
+            }
+        }
     }
 
     pub fn update_media(&mut self, mut m: Media) -> Result<Media, Box<dyn Error>> {
@@ -227,7 +300,6 @@ impl<'a> DbTx<'a> {
     }
 }
 
-
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Key {
     pub name: Name<Self>,
@@ -236,14 +308,20 @@ pub struct Key {
     /// PEM-encoded public key
     pub public_key: String,
 
-    meta: Meta,
+    pub meta: Meta,
 
     pub backups: Vec<Name<Media>>
 }
 
 impl Key {
     pub fn new(name: Name<Self>, algorithm: crate::keypair::Algorithm, public_key: String) -> Self {
-        Key { name, algorithm, meta: Meta::new(), backups: Vec::new(), public_key }
+        Key {
+            name,
+            algorithm,
+            meta: Meta::new(),
+            backups: Vec::new(),
+            public_key,
+        }
     }
 
     pub fn add_backup(&mut self, media: Name<Media>) {
@@ -255,7 +333,7 @@ impl Key {
 
 impl crate::ui::ListItem for Key {
     fn column_names() -> &'static [&'static str] {
-        &[ "name", "algorithm", "backups" ]
+        &["name", "algorithm", "backups"]
     }
 
     fn get_field(&self, col: usize) -> String {
@@ -268,17 +346,37 @@ impl crate::ui::ListItem for Key {
     }
 }
 
-/// A root CA that we have managed
+/// A certificate managed by pkiboo
 #[derive(Serialize, Deserialize, Clone)]
-pub struct Root {
-    name: Name<Self>,
-    key: Name<Key>,
+pub struct Cert {
+    pub name: Name<Self>,
+    pub key: Name<Key>,
 
-    created_on: chrono::DateTime<chrono::Utc>,
+    /// Issuing certificate, or none when this certificate is self-signed.
+    pub issuer: Option<Name<Self>>,
 
-    meta: Meta,
+    /// PEM-encoded public certificate.
+    pub certificate: String,
 
-    backups: Vec<Name<Media>>,
+    pub created_on: chrono::DateTime<chrono::Utc>,
+
+    pub meta: Meta,
+}
+
+impl crate::ui::ListItem for Cert {
+    fn column_names() -> &'static [&'static str] {
+        &["name", "key", "issuer", "created"]
+    }
+
+    fn get_field(&self, col: usize) -> String {
+        match col {
+            0 => self.name.to_string(),
+            1 => self.key.to_string(),
+            2 => self.issuer.as_ref().map(ToString::to_string).unwrap_or_default(),
+            3 => self.created_on.to_rfc3339(),
+            _ => String::new(),
+        }
+    }
 }
 
 /// Registered media
@@ -290,18 +388,23 @@ pub struct Media {
     /// Trusted for backup storage (if false, only pieces are allowed)
     pub trusted: bool,
 
-    pub meta: Meta
+    pub meta: Meta,
 }
 
 impl Media {
     pub fn new(label: Name<Self>, id: crate::media::MediaId, trusted: bool) -> Self {
-        Self { label, id, trusted, meta: Meta::new() }
+        Self {
+            label,
+            id,
+            trusted,
+            meta: Meta::new(),
+        }
     }
 }
 
 impl crate::ui::ListItem for Media {
     fn column_names() -> &'static [&'static str] {
-        &[ "label", "id", "trusted" ]
+        &["label", "id", "trusted"]
     }
 
     fn get_field(&self, col: usize) -> String {
@@ -313,7 +416,6 @@ impl crate::ui::ListItem for Media {
         }
     }
 }
-
 
 /// Split of a key
 #[derive(Serialize, Deserialize, Clone)]
@@ -328,12 +430,12 @@ pub struct Split {
 
     pub meta: Meta,
 
-    backups: Vec<Name<Media>>
+    backups: Vec<Name<Media>>,
 }
 
 struct MetaEntry {
     key: String,
-    value: String
+    value: String,
 }
 
 impl crate::ui::ListItem for MetaEntry {
@@ -345,42 +447,53 @@ impl crate::ui::ListItem for MetaEntry {
         match col {
             0 => self.key.clone(),
             1 => self.value.clone(),
-            _ => "".into()
+            _ => "".into(),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct Meta {
-    pub metadata: HashMap<String, String>
+    pub metadata: HashMap<String, String>,
 }
 
 impl Meta {
     pub fn new() -> Self {
-        Meta { metadata: HashMap::<String, String>::new() }
+        Meta {
+            metadata: HashMap::<String, String>::new(),
+        }
     }
 
     pub async fn manage<Ui: crate::ui::Ui>(&mut self, ui: &Ui, args: &MetaSetArgs) {
         match &args.command {
             MetaCommand::Remove { key } => {
                 self.metadata.remove(key);
-            },
+            }
             MetaCommand::Set { key, value } => {
                 self.metadata.insert(key.clone(), value.clone());
             }
             MetaCommand::Show { key, list_options } => {
-                let entries : Vec<MetaEntry> = if key.is_empty() {
-                    self.metadata.iter().map(|(key, value)| MetaEntry { key: key.clone(), value: value.clone() }).collect()
+                let entries: Vec<MetaEntry> = if key.is_empty() {
+                    self.metadata
+                        .iter()
+                        .map(|(key, value)| MetaEntry {
+                            key: key.clone(),
+                            value: value.clone(),
+                        })
+                        .collect()
                 } else {
                     key.iter()
                         .map(|key| {
                             let value = match self.metadata.get(key) {
                                 None => String::new(),
-                                Some(v) => v.clone()
+                                Some(v) => v.clone(),
                             };
-                            MetaEntry { key: key.clone(),
-                                        value }
-                        }).collect()
+                            MetaEntry {
+                                key: key.clone(),
+                                value,
+                            }
+                        })
+                        .collect()
                 };
                 ui.list(entries).with_options(list_options).display().await
             }
@@ -391,7 +504,8 @@ impl Meta {
 impl Serialize for Meta {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
+        S: serde::Serializer,
+    {
         self.metadata.serialize(serializer)
     }
 }
@@ -399,8 +513,9 @@ impl Serialize for Meta {
 impl<'de> Deserialize<'de> for Meta {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: serde::Deserializer<'de> {
-        let metadata = HashMap::<String,String>::deserialize(deserializer)?;
+        D: serde::Deserializer<'de>,
+    {
+        let metadata = HashMap::<String, String>::deserialize(deserializer)?;
         Ok(Meta { metadata })
     }
 }
@@ -413,32 +528,37 @@ pub struct MetaSetArgs {
 
 #[derive(clap::Subcommand)]
 pub enum MetaCommand {
+    /// Remove a metadata value
     Remove {
         #[arg(long)]
-        key: String
+        key: String,
     },
+
+    /// Set a metadata value
     Set {
         #[arg(long)]
         key: String,
         #[arg(long)]
-        value: String
+        value: String,
     },
+
+    /// Show metadata values
     Show {
         #[arg(long)]
         key: Vec<String>,
         #[command(flatten)]
-        list_options: crate::util::ListOptions
-    }
+        list_options: crate::util::ListOptions,
+    },
 }
 
 // Traits
-pub trait Entity : Any {
+pub trait Entity: Any {
     fn kind(&self) -> &'static str;
     fn emoji(&self) -> &'static str;
     fn name(&self) -> &String;
 }
 
-pub trait PrivateEntity : Entity {
+pub trait PrivateEntity: Entity {
     /// private entities can be backed up to media and should be able to tell us where they are
     fn backups(&self) -> Vec<Name<Media>>;
 }
@@ -457,6 +577,20 @@ impl Entity for Key {
     }
 }
 
+impl Entity for Cert {
+    fn kind(&self) -> &'static str {
+        "certificate"
+    }
+
+    fn emoji(&self) -> &'static str {
+        "📜"
+    }
+
+    fn name(&self) -> &String {
+        (&self.name).into()
+    }
+}
+
 impl PrivateEntity for Key {
     fn backups(&self) -> Vec<Name<Media>> {
         self.backups.clone()
@@ -467,17 +601,17 @@ impl PrivateEntity for Key {
 impl Db {
     fn entities(&self) -> impl Iterator<Item = &dyn Entity> {
         itertools::chain!(
-            self.keys.iter().map(|x| x as &dyn Entity)
+            self.keys.iter().map(|x| x as &dyn Entity),
+            self.certs.iter().map(|x| x as &dyn Entity)
         )
     }
 
     fn private_entities(&self) -> impl Iterator<Item = &dyn PrivateEntity> {
-        itertools::chain!(
-            self.keys.iter().map(|x| x as &dyn PrivateEntity)
-        )
+        itertools::chain!(self.keys.iter().map(|x| x as &dyn PrivateEntity))
     }
 
     fn find_media_entities(&self, media: &Name<Media>) -> impl Iterator<Item = &dyn PrivateEntity> {
-        self.private_entities().filter(|e| e.backups().contains(media))
+        self.private_entities()
+            .filter(|e| e.backups().contains(media))
     }
 }
