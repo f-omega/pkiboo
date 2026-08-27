@@ -45,6 +45,22 @@ pub trait UiKeypairExt: Task {
         db: &OpenedDb,
         key_id: &Name<Key>,
     ) -> Result<LoadedPrivateKey, Box<dyn Error>> {
+        self.load_private_key_with_source_until(
+            db,
+            key_id,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+    }
+
+    /// Load a private key while allowing the parent workflow to cancel all
+    /// pending media waits cleanly.
+    async fn load_private_key_with_source_until(
+        &self,
+        db: &OpenedDb,
+        key_id: &Name<Key>,
+        parent_cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<LoadedPrivateKey, Box<dyn Error>> {
         let key = db
             .lookup_key(key_id)
             .ok_or::<String>("Could not find key".into())?;
@@ -58,6 +74,7 @@ pub trait UiKeypairExt: Task {
 
         for media_name in key.backups.iter().cloned() {
             let worker_cancel = cancel.child_token();
+            let parent_cancel = parent_cancel.clone();
             let private_key_path = private_key_path.clone();
 
             waiters.push(async move {
@@ -89,6 +106,10 @@ pub trait UiKeypairExt: Task {
                             };
 
                             tokio::select! {
+                                _ = parent_cancel.cancelled() => {
+                                    online.mark_cancelled("Key loading was interrupted".into()).await;
+                                    Ok(None)
+                                }
                                 _ = worker_cancel.cancelled() => {
                                     online.mark_cancelled("Another copy was loaded".into()).await;
                                     Ok(None)
@@ -133,6 +154,10 @@ pub trait UiKeypairExt: Task {
                 Ok(None) => {}
                 Err(error) => last_error = Some(error),
             }
+        }
+
+        if parent_cancel.is_cancelled() {
+            return Err("Key loading was interrupted".into());
         }
 
         Err(last_error.unwrap_or_else(|| "No complete key copy could be loaded".into()))

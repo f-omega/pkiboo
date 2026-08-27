@@ -67,11 +67,13 @@ pub async fn main<Ui: crate::Ui>(
                 // satisfy several pending keys before the operator removes it.
                 let db_ref = &db;
                 let mut loads = FuturesUnordered::new();
+                let load_cancel = tokio_util::sync::CancellationToken::new();
                 for key in keys_to_repair {
                     let loader = task.clone();
+                    let key_cancel = load_cancel.clone();
                     loads.push(async move {
                         let result = loader
-                            .load_private_key_with_source(db_ref, &key.name)
+                            .load_private_key_with_source_until(db_ref, &key.name, key_cancel)
                             .await;
                         (key, result)
                     });
@@ -84,7 +86,8 @@ pub async fn main<Ui: crate::Ui>(
                     let next = tokio::select! {
                         _ = tokio::signal::ctrl_c() => {
                             interrupted = true;
-                            None
+                            load_cancel.cancel();
+                            continue;
                         }
                         result = loads.next() => result,
                     };
@@ -126,12 +129,8 @@ pub async fn main<Ui: crate::Ui>(
 
                 // All private keys are now in memory, so source media can be
                 // released before the destination manifest is modified.
-                let release_results = join_all(
-                    loaded_keys
-                        .iter()
-                        .map(|(_, _, backend)| backend.release()),
-                )
-                .await;
+                let release_results =
+                    join_all(loaded_keys.iter().map(|(_, _, backend)| backend.release())).await;
                 if let Some(error) = release_results.into_iter().find_map(Result::err) {
                     return Err(error);
                 }
