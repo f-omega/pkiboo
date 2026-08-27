@@ -91,19 +91,13 @@ impl CliTasks {
         let progress_bar = indicatif::ProgressBar::new_spinner();
         progress_bar.set_message(message);
 
-        // An unbounded indicatif bar does not advance on its own. Use the
-        // spinner slot for a compact pulse that travels in both directions,
-        // and explicitly drive it with a steady timer.
+        // An unbounded indicatif bar does not advance on its own. Use a compact
+        // rotating quadrant and explicitly drive it with a steady timer.
         let style = indicatif::ProgressStyle::with_template(
-            "{prefix:.dim} 🔄 {spinner:.cyan} {msg}",
+            "{prefix:.dim} {spinner:.cyan} {msg}",
         )
         .expect("valid task progress template")
-        .tick_strings(&[
-            "▰▱▱",
-            "▱▰▱",
-            "▱▱▰",
-            "▱▰▱",
-        ]);
+        .tick_strings(&["◴", "◷", "◶", "◵"]);
 
         progress_bar.set_style(style);
         progress_bar.enable_steady_tick(std::time::Duration::from_millis(90));
