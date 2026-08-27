@@ -120,6 +120,28 @@ impl TaskTree {
         TaskPlacement { id, index, depth }
     }
 
+    /// Remove a finished task from the live tree.
+    ///
+    /// Workflows finish child tasks before their parents, so a completed node
+    /// should not have live descendants by the time it is removed.
+    pub fn remove(&mut self, id: TaskId) {
+        let index = self
+            .nodes
+            .iter()
+            .position(|node| node.id == id)
+            .expect("task must belong to this task tree");
+
+        debug_assert!(
+            !self
+                .nodes
+                .iter()
+                .any(|node| self.is_descendant_of(node.id, id)),
+            "a task cannot finish while it still has live children"
+        );
+
+        self.nodes.remove(index);
+    }
+
     fn is_descendant_of(&self, mut node: TaskId, ancestor: TaskId) -> bool {
         loop {
             let Some(parent) = self
@@ -173,5 +195,14 @@ mod tests {
 
         let child = tree.insert(Some(first_root.id));
         assert_eq!(child.index, 1);
+    }
+
+    #[test]
+    fn completed_tasks_no_longer_affect_live_placement() {
+        let mut tree = TaskTree::default();
+        let first = tree.insert(None);
+        tree.remove(first.id);
+
+        assert_eq!(tree.insert(None).index, 0);
     }
 }

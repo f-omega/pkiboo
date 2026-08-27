@@ -73,8 +73,9 @@ struct CliTasks {
 struct CliTaskState {
     tree: TaskTree,
 
-    // MultiProgress keeps only weak references. Retain each bar so completed
-    // task rows remain available while later tasks are rendered.
+    // MultiProgress keeps only weak references. Retain each bar while its task
+    // is live, then remove it after printing the final status above the live
+    // progress area.
     bars: HashMap<TaskId, indicatif::ProgressBar>,
 }
 
@@ -90,13 +91,36 @@ impl CliTasks {
         let progress_bar = indicatif::ProgressBar::new_spinner();
         progress_bar.set_message(message);
 
+        // An unbounded indicatif bar does not advance on its own. Use the
+        // spinner slot for a compact pulse that travels in both directions,
+        // and explicitly drive it with a steady timer.
+        let style = indicatif::ProgressStyle::with_template(
+            "{prefix:.dim} 🔄 {spinner:.cyan} {msg}",
+        )
+        .expect("valid task progress template")
+        .tick_strings(&[
+            "▰▱▱▱▱▱▱▱",
+            "▱▰▱▱▱▱▱▱",
+            "▱▱▰▱▱▱▱▱",
+            "▱▱▱▰▱▱▱▱",
+            "▱▱▱▱▰▱▱▱",
+            "▱▱▱▱▱▰▱▱",
+            "▱▱▱▱▱▱▰▱",
+            "▱▱▱▱▱▱▱▰",
+            "▱▱▱▱▱▱▰▱",
+            "▱▱▱▱▱▰▱▱",
+            "▱▱▱▱▰▱▱▱",
+            "▱▱▱▰▱▱▱▱",
+            "▱▱▰▱▱▱▱▱",
+            "▱▰▱▱▱▱▱▱",
+        ]);
+
+        progress_bar.set_style(style);
+        progress_bar.enable_steady_tick(std::time::Duration::from_millis(90));
+
         let mut state = self.state.lock().expect("CLI task tree lock poisoned");
         let placement = state.tree.insert(parent);
         if placement.depth > 0 {
-            progress_bar.set_style(
-                indicatif::ProgressStyle::with_template("{prefix:.dim} {spinner:.green} {msg}")
-                    .expect("valid child task progress template"),
-            );
             progress_bar.set_prefix(format!(
                 "{}↳",
                 "  ".repeat(placement.depth.saturating_sub(1))
@@ -109,8 +133,39 @@ impl CliTasks {
         CliTask {
             tasks: self.clone(),
             id: placement.id,
+            depth: placement.depth,
             progress_bar,
         }
+    }
+
+    fn finish_task(&self, id: TaskId, depth: usize, symbol: &str, message: String) {
+        let progress_bar = {
+            let mut state = self.state.lock().expect("CLI task tree lock poisoned");
+
+            // Error-reporting paths can attempt to finish a task more than
+            // once. Only the first terminal state should produce output.
+            let Some(progress_bar) = state.bars.remove(&id) else {
+                return;
+            };
+
+            state.tree.remove(id);
+            progress_bar
+        };
+
+        let _ = self.progress.remove(&progress_bar);
+
+        let indent = if depth == 0 {
+            String::new()
+        } else {
+            format!("{}↳ ", "  ".repeat(depth.saturating_sub(1)))
+        };
+
+        // MultiProgress::println writes above the currently drawn progress
+        // bars, leaving one stable history row instead of a finished bar that
+        // gets rendered again as later tasks update.
+        let _ = self
+            .progress
+            .println(format!("{indent}{symbol} {message}"));
     }
 }
 
@@ -118,6 +173,7 @@ impl CliTasks {
 pub struct CliTask {
     tasks: Arc<CliTasks>,
     id: TaskId,
+    depth: usize,
     progress_bar: indicatif::ProgressBar,
 }
 
@@ -128,11 +184,16 @@ pub struct CliList {
 
 impl Task for CliTask {
     async fn mark_complete(&self) {
-        self.progress_bar.finish()
+        self.tasks.finish_task(
+            self.id,
+            self.depth,
+            "✅",
+            self.progress_bar.message().to_string(),
+        );
     }
 
     async fn mark_error(&self, message: String) {
-        self.progress_bar.abandon_with_message(message);
+        self.tasks.finish_task(self.id, self.depth, "❌", message);
     }
 
     async fn set_message(&self, message: String) {
