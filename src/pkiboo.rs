@@ -155,7 +155,10 @@ impl Db {
         self.splits.iter().find(|n| n.label == *nm)
     }
 
-    pub async fn backup(
+    /// Write a non-authoritative snapshot that may help reconstruct local
+    /// state after loss. The local database remains authoritative during
+    /// ordinary operation; snapshots on different media may be stale.
+    pub async fn write_recovery_hint(
         &self,
         media: Arc<dyn crate::media::backend::Media>,
     ) -> Result<(), Box<dyn Error>> {

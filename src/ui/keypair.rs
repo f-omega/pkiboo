@@ -137,11 +137,19 @@ pub trait UiKeypairExt: Task {
                     self.set_message(format!("Read private key from {media}"))
                         .await;
                     return match PKey::private_key_from_pem(bytes.expose_secret()) {
-                        Ok(private_key) => Ok(LoadedPrivateKey {
-                            private_key,
-                            media,
-                            backend,
-                        }),
+                        Ok(private_key) => {
+                            if let Err(error) = db.write_recovery_hint(backend.clone()).await {
+                                self.set_message(format!(
+                                    "Read private key from {media}; recovery hint was not written: {error}"
+                                ))
+                                .await;
+                            }
+                            Ok(LoadedPrivateKey {
+                                private_key,
+                                media,
+                                backend,
+                            })
+                        }
                         Err(error) => {
                             self.mark_error(format!(
                                 "The key was verified from {media}, but OpenSSL could not read it: {error}"

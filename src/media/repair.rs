@@ -184,7 +184,12 @@ pub async fn main<Ui: crate::Ui>(
                 drop(transaction);
 
                 // Write the reconciled database, not the pre-repair view.
-                db.backup(backend.clone()).await?;
+                if let Err(error) = db.write_recovery_hint(backend.clone()).await {
+                    task.set_message(format!(
+                        "Repair completed, but the database recovery hint could not be written: {error}"
+                    ))
+                    .await;
+                }
                 Ok::<_, Box<dyn Error>>(after)
             }
             .await;

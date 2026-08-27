@@ -48,10 +48,10 @@ async fn verify_copy(
     db: &crate::pkiboo::Db,
     key: &Key,
     backend: Arc<dyn MediaBackend>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<Option<String>, Box<dyn Error>> {
     backend.wait_for_available().await?;
 
-    let manifest = crate::media::OpenManifest::new(backend).await?;
+    let manifest = crate::media::OpenManifest::new(backend.clone()).await?;
     let private_pem = manifest
         .read_verified(db, &key.key_path())
         .await?
@@ -63,7 +63,11 @@ async fn verify_copy(
         return Err(format!("Private key copy does not match public key {}", key.name).into());
     }
 
-    Ok(())
+    Ok(db
+        .write_recovery_hint(backend)
+        .await
+        .err()
+        .map(|error| error.to_string()))
 }
 
 async fn release(backend: &Arc<dyn MediaBackend>) -> Result<String, Box<dyn Error>> {
@@ -153,8 +157,11 @@ pub async fn main<Ui: crate::Ui>(
                     }
                     verification = verify_copy(&db, &key, backend.clone()) => {
                         match verification {
-                            Ok(()) => match release(&backend).await {
-                                Ok(detail) => {
+                            Ok(hint_error) => match release(&backend).await {
+                                Ok(mut detail) => {
+                                    if let Some(error) = hint_error {
+                                        detail.push_str(&format!("; recovery hint was not written: {error}"));
+                                    }
                                     let verified_at = chrono::Utc::now();
                                     task.set_message(detail.clone()).await;
                                     task.mark_complete().await;

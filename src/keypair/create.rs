@@ -79,47 +79,38 @@ pub(crate) async fn main<Ui: crate::Ui>
         return Err(format!("Some media were untrusted: {}", untrusted.iter().format(", ")).into()); // TODO prettier output
     }
 
-    let committer = {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<(
-            Name<Media>,
-            chrono::DateTime<chrono::Utc>,
-        )>(4);
-        let committer = {
-            let key_name = loaded.key.name.clone();
-            tokio::spawn(async move {
-                while let Some((media_name, verified_at)) = rx.recv().await {
-                    let mut tx = db.transaction();
-                    let mut key = tx.lookup_key(&key_name).unwrap().clone();
-                    key.add_backup(media_name.clone());
-                    key.record_verification(media_name, verified_at);
-                    let _ = tx.update_key(key); // Should always work 
-                }
-            })
-        };
+    let written = try_join_all(final_media.iter().map(async |m| {
+        boo.ui().task(format!("Waiting for {} to become available", m.id).into(),
+                      async |task| -> Result<_, Box<dyn Error>> {
+                          let backend = m.id.open_backend().await?;
+                          backend.wait_for_available().await?;
 
-        let _: Vec<()> = try_join_all(final_media.iter().map(async |m| -> Result<(), Box<dyn Error>> {
-            boo.ui().task(format!("Waiting for {} to become available", m.id).into(),
-                          async |task| -> Result<(), Box<dyn Error>> {
-                              let backend = m.id.open_backend().await?;
-                              backend.wait_for_available().await?;
+                          let mut manifest = OpenManifest::new(backend.clone()).await?;
+                          loaded.save_to_media(&mut manifest).await?;
+                          manifest.save().await?;
 
-                              let mut manifest = OpenManifest::new(backend.clone()).await?;
+                          task.set_message(format!("Key written to {}", m.id).into()).await;
+                          Ok((m.label.clone(), chrono::Utc::now(), backend))
+                      }).await
+    }).collect::<Vec<_>>()).await?;
 
-                              loaded.save_to_media(&mut manifest).await?;
+    let mut updated_key = loaded.key.clone();
+    for (media, verified_at, _) in &written {
+        updated_key.add_backup(media.clone());
+        updated_key.record_verification(media.clone(), *verified_at);
+    }
+    db.transaction().update_key(updated_key)?;
 
-                              manifest.save().await?;
-
-                              tx.send((m.label.clone(), chrono::Utc::now())).await?;
-
-                              task.set_message(format!("Key written to {}", m.id).into()).await;
-                              Ok(())
-                          }).await?;
-            Ok(())
-        }).collect::<Vec<_>>()).await?;
-        committer
-    };
-
-    committer.await?;
+    let db_ref = &db;
+    let _: Vec<()> = try_join_all(written.into_iter().map(|(media, _, backend)| async move {
+        if let Err(error) = db_ref.write_recovery_hint(backend.clone()).await {
+            crate::cli_common::warn(format!(
+                "Key was written to {media}, but its database recovery hint could not be refreshed: {error}"
+            ));
+        }
+        backend.release().await?;
+        Ok::<_, Box<dyn Error>>(())
+    }).collect::<Vec<_>>()).await?;
 
     Ok(())
 }

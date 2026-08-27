@@ -154,15 +154,54 @@ pub async fn main<Ui: crate::Ui>(
             // backend; an existing operator-managed mount is left untouched.
             let assessment = async {
                 backend.wait_for_available().await?;
-                MediaAssessment::collect(&db, &media, backend.clone()).await
+                let assessment = MediaAssessment::collect(&db, &media, backend.clone()).await?;
+
+                if !args.no_store {
+                    let verified_paths = assessment
+                        .verified_files
+                        .iter()
+                        .map(|file| file.path.clone())
+                        .collect::<std::collections::HashSet<_>>();
+                    let updates = db
+                        .keys
+                        .iter()
+                        .filter(|key| key.backups.contains(&media.label))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let mut transaction = db.transaction();
+
+                    for mut key in updates {
+                        if verified_paths.contains(&key.key_path()) {
+                            key.record_verification(media.label.clone(), assessment.checked_at);
+                        } else {
+                            key.clear_verification(&media.label);
+                        }
+                        transaction.update_key(key)?;
+                    }
+                }
+
+                // Even --no-store only suppresses new verification evidence;
+                // every accessible medium receives the current recovery hint.
+                let hint_error = db
+                    .write_recovery_hint(backend.clone())
+                    .await
+                    .err()
+                    .map(|error| error.to_string());
+                Ok::<_, Box<dyn Error>>((assessment, hint_error))
             }
             .await;
             let release = backend.release().await;
 
             match (assessment, release) {
-                (Ok(assessment), Ok(_)) => {
-                    task.set_message(format!("Assessed and released {}", media.label))
-                        .await;
+                (Ok((assessment, hint_error)), Ok(_)) => {
+                    let message = match hint_error {
+                        Some(error) => format!(
+                            "Assessed and released {}; recovery hint was not written: {error}",
+                            media.label
+                        ),
+                        None => format!("Assessed, synced, and released {}", media.label),
+                    };
+                    task.set_message(message).await;
                     Ok(assessment)
                 }
                 (Err(error), _) => Err(error),
@@ -170,30 +209,6 @@ pub async fn main<Ui: crate::Ui>(
             }
         })
         .await?;
-
-    if !args.no_store {
-        let verified_paths = assessment
-            .verified_files
-            .iter()
-            .map(|file| file.path.clone())
-            .collect::<std::collections::HashSet<_>>();
-        let updates = db
-            .keys
-            .iter()
-            .filter(|key| key.backups.contains(&media.label))
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut transaction = db.transaction();
-
-        for mut key in updates {
-            if verified_paths.contains(&key.key_path()) {
-                key.record_verification(media.label.clone(), assessment.checked_at);
-            } else {
-                key.clear_verification(&media.label);
-            }
-            transaction.update_key(key)?;
-        }
-    }
 
     display_assessment(boo, assessment).await
 }

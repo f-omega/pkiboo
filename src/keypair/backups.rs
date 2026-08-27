@@ -123,7 +123,25 @@ pub(crate) async fn main<Ui: crate::Ui>(
         )
         .await;
 
-    // Release media even when writing failed after Pkiboo mounted it.
+    let update_result = if write_result.is_ok() {
+        let mut updated_key = key;
+        updated_key.add_backup(destination.label.clone());
+        updated_key.record_verification(destination.label.clone(), chrono::Utc::now());
+        db.transaction().update_key(updated_key).map(|_| ())
+    } else {
+        Ok(())
+    };
+
+    let hint_error = if write_result.is_ok() && update_result.is_ok() {
+        db.write_recovery_hint(destination_backend.clone())
+            .await
+            .err()
+    } else {
+        None
+    };
+
+    // Release media even when writing, local-state update, or recovery-hint
+    // synchronization failed after Pkiboo mounted it.
     let release_result = boo
         .ui()
         .task("Release destination media".into(), async |task| {
@@ -132,12 +150,13 @@ pub(crate) async fn main<Ui: crate::Ui>(
         .await;
 
     write_result?;
+    update_result?;
+    if let Some(error) = hint_error {
+        crate::cli_common::warn(format!(
+            "Backup succeeded, but the database recovery hint could not be written: {error}"
+        ));
+    }
     release_result?;
-
-    let mut updated_key = key;
-    updated_key.add_backup(destination.label.clone());
-    updated_key.record_verification(destination.label, chrono::Utc::now());
-    db.transaction().update_key(updated_key)?;
 
     Ok(())
 }

@@ -163,7 +163,12 @@ pub(crate) async fn main<Ui: crate::Ui>(
         let manifest = OpenManifest::create(backend.clone());
         manifest.save().await?;
 
-        transaction.backup(backend.clone()).await?;
+        if let Err(error) = transaction.write_recovery_hint(backend.clone()).await {
+            crate::cli_common::warn(format!(
+                "Media was initialized, but its database recovery hint could not be written: {error}"
+            ));
+        }
     };
+    backend.release().await?;
     Ok(())
 }
