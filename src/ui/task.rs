@@ -13,13 +13,11 @@ pub trait TaskStarter {
 }
 
 /// A running task exposed by a UI backend.
-pub trait Task: TaskStarter<TaskHandle = Self> + Send + Sync + Clone {
+pub trait Task: TaskStarter<TaskHandle = Self> + super::Presenter + Send + Sync + Clone {
     async fn set_message(&self, message: String);
     async fn mark_complete(&self);
     async fn mark_error(&self, message: String);
     async fn mark_cancelled(&self, message: String);
-
-    fn property_list(&self, props: Vec<(String, String)>);
 }
 
 #[allow(dead_code)]

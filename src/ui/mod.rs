@@ -1,19 +1,21 @@
 #![allow(async_fn_in_trait)]
 
 pub mod keypair;
+mod presenter;
 mod task;
 
 pub use keypair::*;
+pub use presenter::*;
 pub use task::*;
 
 // pub trait Prompt {
 //     async fn choose(&self, choices: Vec<String>) -> Option<u32>;
 //     async fn prompt(&self, message: &String, default: &String) -> String;
 //     async fn yesno(&self, question: &String) -> bool;
-// 
+//
 //     async fn add_prompt(&self, prompt: Box<dyn Prompter>);
 // }
-// 
+//
 // pub trait Prompter {
 //     async fn start(&self, prompt: Box<dyn Prompt>);
 // }
@@ -36,7 +38,9 @@ pub trait ListItem {
 }
 
 impl<Item: ListItem> ListModel for Vec<Item> {
-    fn n_rows(&self) -> usize { self.len() }
+    fn n_rows(&self) -> usize {
+        self.len()
+    }
     fn column_names(&self) -> Vec<String> {
         let columns = <Item as ListItem>::column_names();
         columns.to_vec().iter().map(|x| x.to_string()).collect()
@@ -46,11 +50,7 @@ impl<Item: ListItem> ListModel for Vec<Item> {
     }
 }
 
-pub trait Ui: TaskStarter {
-    type List: ListView;
-
+pub trait Ui: TaskStarter + Presenter {
     async fn ready(&self);
-
-    fn list<L: ListModel + 'static>(&self, list: L) -> Self::List;
-//    async fn ask(&self, prompt: Box<dyn Prompter>);
+    //    async fn ask(&self, prompt: Box<dyn Prompter>);
 }

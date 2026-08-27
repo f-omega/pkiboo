@@ -1,4 +1,4 @@
-use crate::ui::{Task, TaskStarterExt};
+use crate::ui::{Presenter, Property, PropertyList, PropertyListView, TaskStarterExt};
 use futures::future::try_join_all;
 use std::error::Error;
 
@@ -26,18 +26,16 @@ pub async fn main<Ui: crate::Ui>(
     try_join_all(vec![boo.ui().task(
         "Retrieving data".into(),
         async |task| {
-            task.property_list(std::vec![
-                ("Name".into(), media.label.to_string().clone()),
-                ("ID".into(), format!("{}", media.id).into()),
-                (
-                    "Trusted".into(),
-                    if media.trusted {
-                        "yes".into()
-                    } else {
-                        "no".into()
-                    }
-                ),
-            ]);
+            task.property_list(PropertyList::titled(
+                "Media",
+                [
+                    Property::new("Name", media.label.to_string()),
+                    Property::new("ID", media.id.to_string()),
+                    Property::new("Trusted", if media.trusted { "yes" } else { "no" }),
+                ],
+            ))
+            .display()
+            .await;
             Ok(())
         },
     )])

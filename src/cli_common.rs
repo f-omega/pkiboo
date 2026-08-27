@@ -1,14 +1,16 @@
+use crate::ui::{
+    ListModel, ListView, Presenter, PropertyList, PropertyListView, Task, TaskStarter, Ui,
+};
+use crate::ui::{TaskId, TaskTree};
+use anstyle::{AnsiColor, Style};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use anstyle::{AnsiColor, Style};
 use std::io::IsTerminal;
-use crate::ui::{ListModel, ListView, Task, TaskStarter, Ui};
-use crate::ui::{TaskId, TaskTree};
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Duration {
-    days: u32
+    days: u32,
 }
 
 impl Duration {
@@ -18,9 +20,7 @@ impl Duration {
 }
 
 fn warning_style() -> Style {
-    Style::new()
-        .bold()
-        .fg_color(Some(AnsiColor::Yellow.into()))
+    Style::new().bold().fg_color(Some(AnsiColor::Yellow.into()))
 }
 
 impl std::str::FromStr for Duration {
@@ -28,19 +28,19 @@ impl std::str::FromStr for Duration {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (num, unit) = s.split_at(
-            s.find(|c: char| !c.is_ascii_digit()).ok_or("missing unit")?
+            s.find(|c: char| !c.is_ascii_digit())
+                .ok_or("missing unit")?,
         );
 
         let n: u32 = num.parse().map_err(|_| "invalid number")?;
 
         match unit {
-            "y" => Ok(Self {days: n * 365}),
-            "m" => Ok(Self {days: n * 30}),
-            "d" => Ok(Self {days: n}),
-            _ => Err("expected y, m, d".into())
+            "y" => Ok(Self { days: n * 365 }),
+            "m" => Ok(Self { days: n * 30 }),
+            "d" => Ok(Self { days: n }),
+            _ => Err("expected y, m, d".into()),
         }
     }
-
 }
 
 pub(crate) fn warn(msg: String) {
@@ -95,11 +95,9 @@ impl CliTasks {
 
         // An unbounded indicatif bar does not advance on its own. Use a compact
         // rotating quadrant and explicitly drive it with a steady timer.
-        let style = indicatif::ProgressStyle::with_template(
-            "{prefix:.dim} {spinner:.cyan} {msg}",
-        )
-        .expect("valid task progress template")
-        .tick_strings(&["◴", "◷", "◶", "◵"]);
+        let style = indicatif::ProgressStyle::with_template("{prefix:.dim} {spinner:.cyan} {msg}")
+            .expect("valid task progress template")
+            .tick_strings(&["◴", "◷", "◶", "◵"]);
 
         progress_bar.set_style(style);
         progress_bar.enable_steady_tick(std::time::Duration::from_millis(90));
@@ -192,18 +190,14 @@ fn format_task_message(title: &str, detail: Option<&str>) -> String {
     let detail_style = Style::new().dimmed();
 
     match detail {
-        Some(detail) => format!(
-            "{title_style}{title}{title_style:#}{detail_style} — {detail}{detail_style:#}"
-        ),
+        Some(detail) => {
+            format!("{title_style}{title}{title_style:#}{detail_style} — {detail}{detail_style:#}")
+        }
         None => format!("{title_style}{title}{title_style:#}"),
     }
 }
 
-fn format_terminal_task(
-    title: &str,
-    detail: Option<&str>,
-    outcome: CliTaskOutcome,
-) -> String {
+fn format_terminal_task(title: &str, detail: Option<&str>, outcome: CliTaskOutcome) -> String {
     if !std::io::stderr().is_terminal() {
         return format_plain_task(title, detail);
     }
@@ -216,9 +210,9 @@ fn format_terminal_task(
     };
 
     match detail {
-        Some(detail) => format!(
-            "{title_style}{title}{title_style:#}{detail_style} — {detail}{detail_style:#}"
-        ),
+        Some(detail) => {
+            format!("{title_style}{title}{title_style:#}{detail_style} — {detail}{detail_style:#}")
+        }
         None => format!("{title_style}{title}{title_style:#}"),
     }
 }
@@ -241,8 +235,14 @@ pub struct CliTask {
 }
 
 pub struct CliList {
+    tasks: Arc<CliTasks>,
     options: crate::util::ListOptions,
-    inner: Box<dyn ListModel>
+    inner: Box<dyn ListModel>,
+}
+
+pub struct CliPropertyList {
+    tasks: Arc<CliTasks>,
+    properties: PropertyList,
 }
 
 impl Task for CliTask {
@@ -282,17 +282,28 @@ impl Task for CliTask {
     }
 
     async fn set_message(&self, message: String) {
-        *self
-            .detail
-            .lock()
-            .expect("CLI task detail lock poisoned") = Some(message.clone());
+        *self.detail.lock().expect("CLI task detail lock poisoned") = Some(message.clone());
         self.progress_bar
             .set_message(format_task_message(&self.title, Some(&message)));
     }
+}
 
-    fn property_list(&self, props: Vec<(String, String)>) {
-        for (k, v) in props {
-            println!("{k}: {v}")
+impl Presenter for CliTask {
+    type List = CliList;
+    type Properties = CliPropertyList;
+
+    fn list<L: ListModel + 'static>(&self, list: L) -> Self::List {
+        CliList {
+            tasks: self.tasks.clone(),
+            inner: Box::new(list),
+            options: crate::util::ListOptions::new(),
+        }
+    }
+
+    fn property_list(&self, properties: PropertyList) -> Self::Properties {
+        CliPropertyList {
+            tasks: self.tasks.clone(),
+            properties,
         }
     }
 }
@@ -322,17 +333,20 @@ impl ListView for CliList {
     async fn display(&self) {
         use comfy_table::*;
         let mut table = Table::new();
-        let mut columns : Vec<(usize, String)> = self.inner.column_names().into_iter().enumerate().collect();
+        let mut columns: Vec<(usize, String)> =
+            self.inner.column_names().into_iter().enumerate().collect();
         if let Some(col_filter) = &self.options.output {
-            columns = col_filter.iter().map(|k| {
-                match columns.iter().find(|(_, nm)| nm == k) {
+            columns = col_filter
+                .iter()
+                .map(|k| match columns.iter().find(|(_, nm)| nm == k) {
                     Some(x) => x.clone(),
-                    None => panic!("Column {} not found", k)
-                }
-            }).collect()
+                    None => panic!("Column {} not found", k),
+                })
+                .collect()
         }
-        let (col_ixs, col_names) : (Vec<usize>, Vec<String>) = columns.into_iter().unzip();
-        table.load_style(comfy_table::presets::UTF8_FULL)
+        let (col_ixs, col_names): (Vec<usize>, Vec<String>) = columns.into_iter().unzip();
+        table
+            .load_style(comfy_table::presets::UTF8_FULL)
             .set_content_arrangement(ContentArrangement::Dynamic)
             .set_width(80) // TODO
             .set_header(col_names);
@@ -340,24 +354,71 @@ impl ListView for CliList {
             let mut cells = Vec::new();
             for c in &col_ixs {
                 cells.push(self.inner.get(i, *c));
-            };
+            }
             table.add_row(cells);
-        };
-        println!("{}", table)
+        }
+        let _ = self.tasks.progress.println(table.to_string());
+    }
+}
+
+impl PropertyListView for CliPropertyList {
+    async fn display(&self) {
+        let label_width = self
+            .properties
+            .properties
+            .iter()
+            .map(|property| property.label.chars().count())
+            .max()
+            .unwrap_or(0);
+
+        if let Some(title) = &self.properties.title {
+            let title_style = Style::new().bold();
+            let title = if std::io::stderr().is_terminal() {
+                format!("{title_style}{title}{title_style:#}")
+            } else {
+                title.clone()
+            };
+            let _ = self.tasks.progress.println(title);
+        }
+
+        for property in &self.properties.properties {
+            let label = format!("{:<label_width$}", property.label);
+            let label_style = Style::new().bold().fg_color(Some(AnsiColor::Cyan.into()));
+            let line = if std::io::stderr().is_terminal() {
+                format!("  {label_style}{label}{label_style:#}  {}", property.value)
+            } else {
+                format!("  {label}  {}", property.value)
+            };
+            let _ = self.tasks.progress.println(line);
+        }
     }
 }
 
 impl Ui for CliBackend {
-    type List = CliList;
-
     async fn ready(&self) {
         match self.ready.borrow_mut().wait_for(|r| *r).await {
             Err(_) => panic!("Could not wait"),
-            Ok(_) => ()
+            Ok(_) => (),
+        }
+    }
+}
+
+impl Presenter for CliBackend {
+    type List = CliList;
+    type Properties = CliPropertyList;
+
+    fn list<L: crate::ui::ListModel + 'static>(&self, list: L) -> Self::List {
+        CliList {
+            tasks: self.tasks.clone(),
+            inner: Box::new(list),
+            options: crate::util::ListOptions::new(),
         }
     }
 
-    fn list<L: crate::ui::ListModel + 'static>(&self, list: L) -> Self::List {
-        CliList { inner: Box::new(list), options: crate::util::ListOptions::new() }
+    fn property_list(&self, properties: PropertyList) -> Self::Properties {
+        CliPropertyList {
+            tasks: self.tasks.clone(),
+            properties,
+        }
     }
 }
