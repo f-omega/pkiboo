@@ -100,6 +100,43 @@ impl PhysicalFingerprint {
     }
 }
 
+/// Check whether a matching physical block device is attached right now.
+/// This is a udev snapshot only: it does not inspect or alter mount state.
+pub fn fingerprint_is_present(fingerprint: &PhysicalFingerprint) -> Result<bool, Box<dyn Error>> {
+    let mut enumerator = udev::Enumerator::new()?;
+    enumerator.match_subsystem("block")?;
+    Ok(enumerator
+        .scan_devices()?
+        .any(|device| PhysicalFingerprint::from_udev_device(&device).matches(fingerprint)))
+}
+
+/// Find a current mount backed by the block device with this fingerprint.
+/// Device nodes and mount sources are canonicalized because mountinfo may use
+/// a stable `/dev/disk/...` symlink while udev reports the kernel device node.
+pub fn mounted_path_for_fingerprint(
+    fingerprint: &PhysicalFingerprint,
+) -> Result<Option<PathBuf>, Box<dyn Error>> {
+    let mut enumerator = udev::Enumerator::new()?;
+    enumerator.match_subsystem("block")?;
+    let device_nodes = enumerator
+        .scan_devices()?
+        .filter(|device| PhysicalFingerprint::from_udev_device(device).matches(fingerprint))
+        .filter_map(|device| device.devnode().and_then(|path| path.canonicalize().ok()))
+        .collect::<Vec<_>>();
+
+    if device_nodes.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Process::myself()?
+        .mountinfo()?
+        .into_iter()
+        .find_map(|mount| {
+            let source = PathBuf::from(mount.mount_source?).canonicalize().ok()?;
+            device_nodes.contains(&source).then_some(mount.mount_point)
+        }))
+}
+
 pub struct DeviceInfo {
     pub fingerprint: PhysicalFingerprint,
 
@@ -108,6 +145,11 @@ pub struct DeviceInfo {
     /// Whether this device shares an underlying disk with the root
     /// filesystem.
     pub system_disk: bool,
+}
+
+pub struct DiscoveredDevice {
+    pub path: PathBuf,
+    pub info: DeviceInfo,
 }
 
 impl DeviceInfo {
@@ -289,6 +331,27 @@ pub fn get_device_info(path: &Path) -> Result<DeviceInfo, Box<dyn Error>> {
 pub fn get_device_info_from_device(path: &Path) -> Result<DeviceInfo, Box<dyn Error>> {
     let block = block_device(path)?;
     Ok(device_info(&block))
+}
+
+/// Enumerate attached physical block media without applying Pkiboo's trust
+/// policy as a filter. Virtual block devices are omitted, but fixed disks,
+/// system disks, removable media, and otherwise-untrusted devices are all
+/// returned so `media inspect --all` can explain their classification.
+pub fn discover_physical_devices() -> Result<Vec<DiscoveredDevice>, Box<dyn Error>> {
+    let mut enumerator = udev::Enumerator::new()?;
+    enumerator.match_subsystem("block")?;
+
+    Ok(enumerator
+        .scan_devices()?
+        .filter(|device| !device.syspath().starts_with("/sys/devices/virtual"))
+        .filter_map(|device| {
+            let path = device.devnode()?.to_path_buf();
+            Some(DiscoveredDevice {
+                path,
+                info: device_info(&device),
+            })
+        })
+        .collect())
 }
 
 #[cfg(test)]

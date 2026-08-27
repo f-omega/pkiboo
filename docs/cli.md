@@ -97,15 +97,19 @@ pkiboo
 │   │   removable; ambiguous SDIO/MMC devices remain fixed because they may be
 │   │   internal eMMC storage.
 │   │
-│   ├── list
-│   │   List all registered media, regardless of backend.
+│   ├── list [--only-online]
+│   │   List registered media with online status. Online means the physical
+│   │   device is attached, regardless of mount state. --only-online filters
+│   │   the listing without waiting for or mounting media.
 │   │
 │   ├── show [--contents]
 │   │   Show media identity, backend-specific details, metadata, contents,
 │   │   and last verification. With --contents, display only its contents.
 │   │
-│   ├── inspect
-│   │   Inspect discoverable media without registering or modifying it.
+│   ├── inspect (--all | --path <mount> | --device <block-device>)
+│   │   Inspect and classify currently attached physical media without
+│   │   mounting, registering, or modifying it. --all includes fixed, system,
+│   │   and untrusted media and notes anything already registered.
 │   │
 │   ├── sync
 │   │   Synchronize public metadata and certificates onto the medium.

@@ -28,6 +28,16 @@ impl MediaAttachment {
     }
 }
 
+impl std::fmt::Display for MediaAttachment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RemovableMedia => write!(f, "removable media"),
+            Self::ExternalBus => write!(f, "external bus"),
+            Self::Fixed => write!(f, "fixed storage"),
+        }
+    }
+}
+
 pub enum ReleaseResult {
     /// Pkiboo mounted the medium and has now unmounted it.
     Released,
@@ -50,6 +60,11 @@ pub trait Media: Sync + Send + Any + 'static {
     fn id(&self) -> MediaId;
 
     async fn ready(&self) -> bool;
+
+    /// Check whether the backing medium is attached without waiting or
+    /// mounting it. The check may reconcile an already-existing mount into
+    /// cached backend state, but never creates a mount.
+    async fn check_if_available(&self) -> Result<bool, Box<dyn Error>>;
 
     /// Ensure that the media is setup (create directories, buckets, etc)
     async fn setup(&self) -> Result<(), Box<dyn Error>>;
@@ -99,6 +114,44 @@ impl Media for FileSystem {
         self.path.lock().await.borrow().is_some()
     }
 
+    async fn check_if_available(&self) -> Result<bool, Box<dyn Error>> {
+        let present = physical::fingerprint_is_present(&self.physical_drive)?;
+        if !present {
+            *self.path.lock().await.borrow_mut() = None;
+            return Ok(false);
+        }
+
+        let mounted_path = physical::mounted_path_for_fingerprint(&self.physical_drive)?;
+        let state = self.path.lock().await;
+
+        match mounted_path {
+            Some(path) => {
+                // Preserve ownership if this instance performed the mount.
+                // Otherwise cache it as an external mount that Pkiboo must
+                // never unmount automatically.
+                let existing = state.borrow().clone();
+                let mount = match existing {
+                    Some(existing) if existing.path == path && existing.mounted_by_pkiboo => {
+                        existing
+                    }
+                    _ => MountState {
+                        path,
+                        mounted_by_pkiboo: false,
+                        object_path: None,
+                    },
+                };
+                *state.borrow_mut() = Some(mount);
+                Ok(true)
+            }
+            None => {
+                // The device is attached but not mounted. Clear any stale
+                // cached path while still reporting it as available.
+                *state.borrow_mut() = None;
+                Ok(true)
+            }
+        }
+    }
+
     async fn setup(&self) -> Result<(), Box<dyn Error>> {
         self.create().await
     }
@@ -131,7 +184,7 @@ impl Media for FileSystem {
         use super::physical;
         use super::physical::PhysicalFingerprint;
 
-        if self.ready().await {
+        if self.check_if_available().await? && self.ready().await {
             return Ok(());
         }
 
@@ -182,7 +235,7 @@ impl Media for FileSystem {
 
         // Another waiter for this same backend may have mounted it while this
         // waiter was queued for the UDisks lock.
-        if self.ready().await {
+        if self.check_if_available().await? && self.ready().await {
             return Ok(());
         }
 

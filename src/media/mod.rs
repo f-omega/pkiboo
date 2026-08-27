@@ -112,7 +112,7 @@ enum Command {
     /// Show detailed information about media
     Show(show::Args),
 
-    /// Inspect discoverable media without modifying it
+    /// Inspect currently attached physical media without modifying it
     Inspect(inspect::Args),
 
     /// Synchronize public metadata and certificates onto media
