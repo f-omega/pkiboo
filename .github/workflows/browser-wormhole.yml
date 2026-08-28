@@ -19,7 +19,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - name: Install wasm-bindgen CLI
-        run: cargo install wasm-bindgen-cli --version 0.2.106 --locked
+        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
       - name: Install WASM standard library
         run: rustup target add wasm32-unknown-unknown --toolchain stable
       - run: cargo +stable build --manifest-path browser-wormhole/Cargo.toml --target wasm32-unknown-unknown --release
