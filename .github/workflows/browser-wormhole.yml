@@ -20,7 +20,9 @@ jobs:
           targets: wasm32-unknown-unknown
       - name: Install wasm-bindgen CLI
         run: cargo install wasm-bindgen-cli --version 0.2.106 --locked
-      - run: cargo build --manifest-path browser-wormhole/Cargo.toml --target wasm32-unknown-unknown --release
+      - name: Install WASM standard library
+        run: rustup target add wasm32-unknown-unknown --toolchain stable
+      - run: cargo +stable build --manifest-path browser-wormhole/Cargo.toml --target wasm32-unknown-unknown --release
       - run: wasm-bindgen browser-wormhole/target/wasm32-unknown-unknown/release/pkiboo_browser_wormhole.wasm --target web --out-dir github-pages/wormhole
       - uses: actions/upload-artifact@v4
         with:
