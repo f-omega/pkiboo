@@ -18,9 +18,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: jetli/wasm-bindgen@v0.2.100
-        with:
-          version: 0.2.106
+      - name: Install wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.106 --locked
       - run: cargo build --manifest-path browser-wormhole/Cargo.toml --target wasm32-unknown-unknown --release
       - run: wasm-bindgen browser-wormhole/target/wasm32-unknown-unknown/release/pkiboo_browser_wormhole.wasm --target web --out-dir github-pages/wormhole
       - uses: actions/upload-artifact@v4
