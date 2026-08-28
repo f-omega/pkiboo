@@ -8,6 +8,8 @@ mod meta;
 pub(crate) mod pdf;
 mod show;
 mod verify;
+#[cfg(feature = "wormhole")]
+mod wormhole;
 
 #[derive(clap::Args)]
 pub struct Args {
