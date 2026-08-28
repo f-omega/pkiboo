@@ -18,9 +18,6 @@ pub struct Args {
     /// Key to split
     #[arg(long)]
     key: String,
-    /// Name for the recovery split
-    #[arg(long)]
-    name: String,
     /// Shares required to reconstruct the key
     #[arg(long)]
     threshold: usize,
@@ -138,10 +135,7 @@ pub async fn main<Ui: crate::Ui>(
 ) -> Result<(), Box<dyn Error>> {
     let mut db = boo.open_database()?;
     let destinations = args.destinations(&db)?;
-    let split_name = Name::<Split>::new(args.name.clone());
-    if db.lookup_split(&split_name).is_some() {
-        return Err(format!("split {} already exists", split_name).into());
-    }
+    let split_name = generate_split_name(&db)?;
     let key_name = Name::<Key>::new(args.key.clone());
     let key = db
         .lookup_key(&key_name)
@@ -335,6 +329,16 @@ fn write_new_private_file(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error
     Ok(())
 }
 
+fn generate_split_name(db: &Db) -> Result<Name<Split>, Box<dyn Error>> {
+    loop {
+        let generated = petname::petname(6, "-").ok_or("could not generate a random split name")?;
+        let name = Name::<Split>::new(generated);
+        if db.lookup_split(&name).is_none() {
+            return Ok(name);
+        }
+    }
+}
+
 fn validate_paper_output_prefix(prefix: &str) -> Result<(), Box<dyn Error>> {
     if prefix.is_empty()
         || prefix == "."
@@ -375,7 +379,6 @@ mod tests {
     fn args(shares: usize, media: &[&str], paper: bool) -> Args {
         Args {
             key: "root".into(),
-            name: "recovery".into(),
             threshold: 2,
             shares,
             media: media.iter().map(|name| (*name).into()).collect(),

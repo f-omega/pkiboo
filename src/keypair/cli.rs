@@ -18,8 +18,7 @@ enum Command {
     Show(super::show::Args),
     /// Create a new complete copy of a key
     Backup(super::backups::Args),
-    /// Manage threshold recovery shares
-    #[command(name = "share", alias = "split")]
+    /// Manage threshold recovery splits
     Split(super::split::Args),
     /// Verify a key copy or recovery path
     Verify(super::verify::Args),
