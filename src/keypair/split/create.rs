@@ -19,10 +19,10 @@ pub struct Args {
     #[arg(long)]
     key: String,
     /// Shares required to reconstruct the key
-    #[arg(long)]
+    #[arg(long, default_value_t = 3)]
     threshold: usize,
     /// Total number of shares to create
-    #[arg(long)]
+    #[arg(long, default_value_t = 5)]
     shares: usize,
     /// Registered media on which to place one share (repeat for each medium)
     #[arg(long, value_name = "MEDIA")]
@@ -42,6 +42,10 @@ pub struct Args {
     /// Filename prefix; produces PREFIX-SHARE.pdf instead of PAPER-NAME.pdf
     #[arg(long, value_name = "PREFIX")]
     paper_output_prefix: Option<String>,
+
+    /// Maximum serialized-share bytes carried by each paper QR code
+    #[arg(long, value_name = "BYTES", default_value_t = 256)]
+    paper_qr_bytes: usize,
 
     /// Allow different shares to be placed on the same medium
     #[arg(long)]
@@ -216,7 +220,7 @@ pub async fn main<Ui: crate::Ui>(
             paper_name,
             share_number,
             path,
-            crate::paper::pdf::generate_paper_pdf(&paper_share)?,
+            crate::paper::pdf::generate_paper_pdf(&paper_share, args.paper_qr_bytes)?,
         ));
     }
 
@@ -386,6 +390,7 @@ mod tests {
             allow_duplicate: false,
             paper_output_dir: PathBuf::from("."),
             paper_output_prefix: None,
+            paper_qr_bytes: 256,
         }
     }
 
