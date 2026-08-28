@@ -60,10 +60,12 @@
 
             pkgs.codex
             pkgs.codex-acp
+
           ];
           buildInputs = [
             pkgs.openssl.dev
             pkgs.udev.dev
+            pkgs.zbar.dev
           ];
           RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";
         };
