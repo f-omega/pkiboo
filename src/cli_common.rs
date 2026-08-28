@@ -3,7 +3,7 @@ use crate::ui::{
     TaskStarter, Ui,
 };
 use crate::ui::{TaskId, TaskTree};
-use anstyle::{AnsiColor, Style};
+use anstyle::{AnsiColor, RgbColor, Style};
 use async_trait::async_trait;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -23,6 +23,62 @@ impl Duration {
 
 fn warning_style() -> Style {
     Style::new().bold().fg_color(Some(AnsiColor::Yellow.into()))
+}
+
+#[derive(Clone, Copy)]
+enum SemanticColor {
+    Identity,
+    Media,
+    Artifact,
+}
+
+fn semantic_style(color: SemanticColor) -> Style {
+    let rgb = match color {
+        // These mirror the indigo, teal, and periwinkle paper-share palette.
+        SemanticColor::Identity => RgbColor(41, 87, 184),
+        SemanticColor::Media => RgbColor(0, 133, 153),
+        SemanticColor::Artifact => RgbColor(102, 110, 194),
+    };
+    Style::new().bold().fg_color(Some(rgb.into()))
+}
+
+fn styled_semantic(value: impl std::fmt::Display, color: SemanticColor) -> String {
+    let value = value.to_string();
+    if std::io::stderr().is_terminal() {
+        let style = semantic_style(color);
+        format!("{style}{value}{style:#}")
+    } else {
+        value
+    }
+}
+
+pub(crate) fn entity_name(value: impl std::fmt::Display) -> String {
+    styled_semantic(value, SemanticColor::Identity)
+}
+
+pub(crate) fn media_name(value: impl std::fmt::Display) -> String {
+    styled_semantic(value, SemanticColor::Media)
+}
+
+pub(crate) fn artifact_name(value: impl std::fmt::Display) -> String {
+    styled_semantic(value, SemanticColor::Artifact)
+}
+
+fn style_table_value(column: &str, value: String) -> String {
+    let column = column.to_ascii_lowercase();
+    if column.contains("media") || column == "label" || column == "paper" {
+        media_name(value)
+    } else if column.contains("path") || column.contains("file") || column.contains("split") {
+        artifact_name(value)
+    } else if column == "name"
+        || column == "key"
+        || column.contains("certificate")
+        || column == "issuer"
+    {
+        entity_name(value)
+    } else {
+        value
+    }
 }
 
 impl std::str::FromStr for Duration {
@@ -486,11 +542,14 @@ impl ListView for CliList {
             .load_style(comfy_table::presets::UTF8_FULL)
             .set_content_arrangement(ContentArrangement::Dynamic)
             .set_width(80) // TODO
-            .set_header(col_names);
+            .set_header(col_names.clone());
         for i in 0..(self.inner.n_rows()) {
             let mut cells = Vec::new();
             for c in &col_ixs {
-                cells.push(self.inner.get(i, *c));
+                cells.push(style_table_value(
+                    &col_names[cells.len()],
+                    self.inner.get(i, *c),
+                ));
             }
             table.add_row(cells);
         }

@@ -22,6 +22,7 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
     let chunks = serialized.chunks(qr_bytes).collect::<Vec<_>>();
     let data_pages = chunks.len();
     let total_pages = data_pages + 1;
+    let created_on = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let prose = instructions(paper);
     let mut pages = Vec::with_capacity(total_pages);
 
@@ -38,35 +39,41 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
         };
         let qr_bytes = yaml_serde::to_string(&segment)?.into_bytes();
         let qr = QrCode::with_error_correction_level(&qr_bytes, EcLevel::M)?;
-        let mut ops = page_header(paper, index + 1, total_pages, Some((index + 1, data_pages)));
+        let mut ops = page_header(
+            paper,
+            index + 1,
+            total_pages,
+            Some((index + 1, data_pages)),
+            &created_on,
+        );
         let prose_bottom =
-            add_instruction_paragraphs(&mut ops, paper, &prose, 18.0, 248.0, 9.2, 4.5);
+            add_instruction_paragraphs(&mut ops, paper, &prose, 18.0, 261.0, 9.2, 4.5);
         let divider_y = prose_bottom - 3.0;
-        add_blue_rule(&mut ops, divider_y);
+        add_content_rule(&mut ops, divider_y);
         let qr_top = divider_y - 5.0;
         let qr_bottom = qr_top - 100.0;
         add_qr(&mut ops, &qr, 55.0, qr_bottom, 100.0);
         add_wrapped_text(
             &mut ops,
             &STANDARD.encode(&qr_bytes),
-            18.0,
+            24.0,
             qr_bottom - 8.0,
             7.0,
             3.5,
-            96,
+            92,
             BuiltinFont::Courier,
         );
         pages.push(PdfPage::new(Mm(210.0), Mm(297.0), ops));
     }
 
-    let mut ops = page_header(paper, total_pages, total_pages, None);
-    let prose_bottom = add_instruction_paragraphs(&mut ops, paper, &prose, 18.0, 248.0, 9.2, 4.5);
+    let mut ops = page_header(paper, total_pages, total_pages, None, &created_on);
+    let prose_bottom = add_instruction_paragraphs(&mut ops, paper, &prose, 18.0, 261.0, 9.2, 4.5);
     let mut y = prose_bottom - 3.0;
-    add_blue_rule(&mut ops, y);
+    add_content_rule(&mut ops, y);
     y -= 10.0;
     add_text(
         &mut ops,
-        "Share placement inventory",
+        &format!("Share placement inventory as of {created_on} (UTC)"),
         18.0,
         y,
         14.0,
@@ -144,12 +151,13 @@ fn page_header(
     page: usize,
     pages: usize,
     qr_piece: Option<(usize, usize)>,
+    created_on: &str,
 ) -> Vec<Op> {
     let mut ops = Vec::new();
     add_centered_text(
         &mut ops,
-        &format!("🧩 {}", p.paper_name),
-        280.0,
+        &p.paper_name.to_string(),
+        282.0,
         18.0,
         BuiltinFont::HelveticaBold,
     );
@@ -160,14 +168,12 @@ fn page_header(
         ),
         None => format!("share {} of {}", p.share.x, p.share.shamir.shares),
     };
-    add_centered_text(&mut ops, &identity, 270.0, 10.0, BuiltinFont::Helvetica);
+    add_centered_text(&mut ops, &identity, 275.0, 10.0, BuiltinFont::Helvetica);
     ops.push(Op::SetOutlineThickness { pt: Pt(1.2) });
-    ops.push(Op::SetOutlineColor {
-        col: electric_blue(),
-    });
+    ops.push(Op::SetOutlineColor { col: header_teal() });
     ops.push(Op::DrawLine {
         line: Line {
-            points: vec![line_point(LEFT, 265.0), line_point(RIGHT, 265.0)],
+            points: vec![line_point(LEFT, 268.0), line_point(RIGHT, 268.0)],
             is_closed: false,
         },
     });
@@ -177,6 +183,13 @@ fn page_header(
             icc_profile: None,
         }),
     });
+    add_centered_text(
+        &mut ops,
+        &format!("created on {created_on} (UTC)"),
+        13.0,
+        7.5,
+        BuiltinFont::Helvetica,
+    );
     add_centered_text(
         &mut ops,
         &format!("page {page} of {pages}"),
@@ -311,7 +324,7 @@ fn add_highlighted_text(
             items: vec![TextItem::Text(before.into())],
         },
         Op::SetFillColor {
-            col: electric_blue(),
+            col: identity_blue(),
         },
         Op::SetFont {
             font: PdfFontHandle::Builtin(BuiltinFont::HelveticaBold),
@@ -334,14 +347,22 @@ fn add_highlighted_text(
     ]);
 }
 
-fn electric_blue() -> Color {
-    Color::Rgb(Rgb::new(0.0, 0.55, 1.0, None))
+fn identity_blue() -> Color {
+    Color::Rgb(Rgb::new(0.16, 0.34, 0.72, None))
 }
 
-fn add_blue_rule(ops: &mut Vec<Op>, y: f32) {
+fn header_teal() -> Color {
+    Color::Rgb(Rgb::new(0.0, 0.52, 0.60, None))
+}
+
+fn content_periwinkle() -> Color {
+    Color::Rgb(Rgb::new(0.40, 0.43, 0.76, None))
+}
+
+fn add_content_rule(ops: &mut Vec<Op>, y: f32) {
     ops.extend([
         Op::SetOutlineColor {
-            col: electric_blue(),
+            col: content_periwinkle(),
         },
         Op::SetOutlineThickness { pt: Pt(1.2) },
         Op::DrawLine {

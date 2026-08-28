@@ -183,7 +183,11 @@ pub async fn main<Ui: crate::Ui>(
     let release = backend.release().await;
     write?;
     release?;
-    eprintln!("Key {} restored to {}.", args.key, args.to);
+    eprintln!(
+        "Key {} restored to {}.",
+        crate::cli_common::entity_name(&args.key),
+        crate::cli_common::media_name(&args.to)
+    );
     Ok(())
 }
 

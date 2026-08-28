@@ -29,7 +29,7 @@ pub struct Args {
     media: Vec<String>,
     /// Issue every share not assigned to media as a paper share
     ///
-    /// Paper names are generated from six random words. A paper share may use
+    /// Paper names derive from the split name and share number. A paper share may use
     /// multiple QR codes; each payload will carry its sequence number and total
     /// so scans can be assembled in any order.
     #[arg(long)]
@@ -39,7 +39,7 @@ pub struct Args {
     #[arg(long, value_name = "DIR", default_value = ".")]
     paper_output_dir: PathBuf,
 
-    /// Filename prefix; produces PREFIX-SHARE.pdf instead of PAPER-NAME-SHARE.pdf
+    /// Filename prefix; produces PREFIX-SHARE.pdf instead of SPLIT-NAME-SHARE.pdf
     #[arg(long, value_name = "PREFIX")]
     paper_output_prefix: Option<String>,
 
@@ -58,7 +58,11 @@ struct Destinations {
 }
 
 impl Args {
-    fn destinations(&self, db: &Db) -> Result<Destinations, Box<dyn Error>> {
+    fn destinations(
+        &self,
+        db: &Db,
+        split_name: &Name<Split>,
+    ) -> Result<Destinations, Box<dyn Error>> {
         let key_name = Name::<Key>::new(self.key.clone());
         let key = db
             .lookup_key(&key_name)
@@ -116,16 +120,13 @@ impl Args {
             0
         };
         let mut paper = Vec::with_capacity(paper_count);
-        let mut generated_names = HashSet::new();
-        while paper.len() < paper_count {
-            let generated =
-                petname::petname(6, "-").ok_or("could not generate a random paper name")?;
-            if generated_names.insert(generated.clone()) {
-                let name = Name::<Paper>::new(generated);
-                if db.lookup_paper(&name).is_none() {
-                    paper.push(name);
-                }
+        for offset in 0..paper_count {
+            let share = media.len() + offset + 1;
+            let name = Name::<Paper>::new(format!("{split_name}-{share}"));
+            if db.lookup_paper(&name).is_some() {
+                return Err(format!("paper {name} already exists").into());
             }
+            paper.push(name);
         }
 
         Ok(Destinations { media, paper })
@@ -138,8 +139,8 @@ pub async fn main<Ui: crate::Ui>(
     args: &Args,
 ) -> Result<(), Box<dyn Error>> {
     let mut db = boo.open_database()?;
-    let destinations = args.destinations(&db)?;
     let split_name = generate_split_name(&db)?;
+    let destinations = args.destinations(&db, &split_name)?;
     let key_name = Name::<Key>::new(args.key.clone());
     let key = db
         .lookup_key(&key_name)
@@ -170,9 +171,7 @@ pub async fn main<Ui: crate::Ui>(
                 .into(),
         );
     }
-    eprintln!(
-        "CHECK PASSED: all generated shares verified and reconstructed private-key PEM bytes match exactly"
-    );
+    eprintln!("✅ Verified recovery and reconstruction from generated shares.");
 
     let storage_locations = destinations
         .media
@@ -280,7 +279,11 @@ pub async fn main<Ui: crate::Ui>(
     let mut paper_records = Vec::with_capacity(rendered_papers.len());
     for (name, share, path, pdf) in rendered_papers {
         write_new_private_file(&path, &pdf)?;
-        eprintln!("📄 Share {} written to {}", share.0, path.display());
+        eprintln!(
+            "📄 Share {} written to {}",
+            share.0,
+            crate::cli_common::artifact_name(path.display())
+        );
         paper_records.push(Paper {
             name,
             key: key_name.clone(),
@@ -291,7 +294,7 @@ pub async fn main<Ui: crate::Ui>(
     }
     if !paper_records.is_empty() {
         crate::cli_common::warn(
-            "Paper shares have been issued as PDF files. Print every PDF and then delete the PDF files; leaving them on disk creates additional copies of the shares.".into(),
+            " 📄 Paper shares have been issued as PDF files. Print every PDF and then delete the PDF files; leaving them on disk creates additional copies of the shares.".into(),
         );
     }
     let mut tx = db.transaction();
@@ -308,7 +311,10 @@ pub async fn main<Ui: crate::Ui>(
         tx.add_paper(paper);
     }
     drop(tx);
-    eprintln!("Split {split_name} created.");
+    eprintln!(
+        "🧩 Split {} created.",
+        crate::cli_common::artifact_name(&split_name)
+    );
     Ok(())
 }
 
@@ -331,7 +337,7 @@ fn write_new_private_file(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error
 
 fn generate_split_name(db: &Db) -> Result<Name<Split>, Box<dyn Error>> {
     loop {
-        let generated = petname::petname(6, "-").ok_or("could not generate a random split name")?;
+        let generated = petname::petname(3, "-").ok_or("could not generate a random split name")?;
         let name = Name::<Split>::new(generated);
         if db.lookup_split(&name).is_none() {
             return Ok(name);
@@ -358,7 +364,7 @@ fn paper_output_filename(
 ) -> String {
     prefix
         .map(|prefix| format!("{prefix}-{}.pdf", share.0))
-        .unwrap_or_else(|| format!("{paper_name}-{}.pdf", share.0))
+        .unwrap_or_else(|| format!("{paper_name}.pdf"))
 }
 
 #[cfg(test)]
@@ -390,10 +396,14 @@ mod tests {
         }
     }
 
+    fn split_name() -> Name<Split> {
+        Name::new("calm-blue-otter".into())
+    }
+
     #[test]
     fn destination_count_must_equal_share_count() {
         let error = args(3, &[], false)
-            .destinations(&db())
+            .destinations(&db(), &split_name())
             .err()
             .unwrap()
             .to_string();
@@ -403,7 +413,7 @@ mod tests {
     #[test]
     fn media_names_must_be_unique() {
         let error = args(2, &["vault", "vault"], false)
-            .destinations(&db())
+            .destinations(&db(), &split_name())
             .err()
             .unwrap()
             .to_string();
@@ -413,7 +423,7 @@ mod tests {
     #[test]
     fn media_names_must_exist() {
         let error = args(1, &["missing"], false)
-            .destinations(&db())
+            .destinations(&db(), &split_name())
             .err()
             .unwrap()
             .to_string();
@@ -426,7 +436,7 @@ mod tests {
         db.keys[0].add_backup(Name::new("vault".into()));
 
         let error = args(1, &["vault"], false)
-            .destinations(&db)
+            .destinations(&db, &split_name())
             .err()
             .unwrap()
             .to_string();
@@ -436,23 +446,20 @@ mod tests {
 
     #[test]
     fn paper_flag_fills_all_unassigned_destinations() {
-        let destinations = args(2, &[], true).destinations(&db()).unwrap();
+        let destinations = args(2, &[], true)
+            .destinations(&db(), &split_name())
+            .unwrap();
         assert_eq!(destinations.paper.len(), 2);
         assert!(destinations.paper[0] != destinations.paper[1]);
-        for name in destinations.paper {
-            assert_eq!(name.split('-').count(), 6);
-        }
+        assert_eq!(destinations.paper[0].to_string(), "calm-blue-otter-1");
+        assert_eq!(destinations.paper[1].to_string(), "calm-blue-otter-2");
     }
 
     #[test]
     fn paper_filename_uses_name_and_share_number_without_prefix() {
         assert_eq!(
-            paper_output_filename(
-                &Name::new("six-word-paper-name-here-now".into()),
-                ShareNumber(4),
-                None
-            ),
-            "six-word-paper-name-here-now-4.pdf"
+            paper_output_filename(&Name::new("calm-blue-otter-4".into()), ShareNumber(4), None),
+            "calm-blue-otter-4.pdf"
         );
     }
 
