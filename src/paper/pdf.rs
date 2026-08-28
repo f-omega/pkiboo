@@ -38,7 +38,7 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
         };
         let qr_bytes = yaml_serde::to_string(&segment)?.into_bytes();
         let qr = QrCode::with_error_correction_level(&qr_bytes, EcLevel::M)?;
-        let mut ops = page_header(paper, index + 1, total_pages);
+        let mut ops = page_header(paper, index + 1, total_pages, Some((index + 1, data_pages)));
         let prose_bottom =
             add_instruction_paragraphs(&mut ops, paper, &prose, 18.0, 248.0, 9.2, 4.5);
         let divider_y = prose_bottom - 3.0;
@@ -51,15 +51,15 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
             &STANDARD.encode(&qr_bytes),
             18.0,
             qr_bottom - 8.0,
-            6.0,
-            3.0,
-            112,
+            7.0,
+            3.5,
+            96,
             BuiltinFont::Courier,
         );
         pages.push(PdfPage::new(Mm(210.0), Mm(297.0), ops));
     }
 
-    let mut ops = page_header(paper, total_pages, total_pages);
+    let mut ops = page_header(paper, total_pages, total_pages, None);
     let prose_bottom = add_instruction_paragraphs(&mut ops, paper, &prose, 18.0, 248.0, 9.2, 4.5);
     let mut y = prose_bottom - 3.0;
     add_blue_rule(&mut ops, y);
@@ -139,7 +139,12 @@ fn instructions(p: &PaperShare) -> Vec<String> {
     ]
 }
 
-fn page_header(p: &PaperShare, piece: usize, pieces: usize) -> Vec<Op> {
+fn page_header(
+    p: &PaperShare,
+    page: usize,
+    pages: usize,
+    qr_piece: Option<(usize, usize)>,
+) -> Vec<Op> {
     let mut ops = Vec::new();
     add_centered_text(
         &mut ops,
@@ -148,13 +153,14 @@ fn page_header(p: &PaperShare, piece: usize, pieces: usize) -> Vec<Op> {
         18.0,
         BuiltinFont::HelveticaBold,
     );
-    add_centered_text(
-        &mut ops,
-        &format!("share {} of {}", p.share.x, p.share.shamir.shares),
-        270.0,
-        10.0,
-        BuiltinFont::Helvetica,
-    );
+    let identity = match qr_piece {
+        Some((piece, pieces)) => format!(
+            "share {} of {}  •  piece {} of {}",
+            p.share.x, p.share.shamir.shares, piece, pieces
+        ),
+        None => format!("share {} of {}", p.share.x, p.share.shamir.shares),
+    };
+    add_centered_text(&mut ops, &identity, 270.0, 10.0, BuiltinFont::Helvetica);
     ops.push(Op::SetOutlineThickness { pt: Pt(1.2) });
     ops.push(Op::SetOutlineColor {
         col: electric_blue(),
@@ -173,7 +179,7 @@ fn page_header(p: &PaperShare, piece: usize, pieces: usize) -> Vec<Op> {
     });
     add_centered_text(
         &mut ops,
-        &format!("page {piece} of {pieces}"),
+        &format!("page {page} of {pages}"),
         8.0,
         9.0,
         BuiltinFont::Helvetica,
@@ -201,23 +207,81 @@ fn add_instruction_paragraphs(
     for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
         for (line_index, line) in wrap(paragraph, 105).iter().enumerate() {
             let line_y = y - line_number as f32 * leading;
-            let font = if paragraph_index == 5 {
-                BuiltinFont::CourierBold
+            if paragraph_index == 5 {
+                add_code_highlights(ops, line, x, line_y, size);
             } else {
-                BuiltinFont::Helvetica
-            };
-            let highlight = match paragraph_index {
-                0 => Some(paper.key_name.as_str()),
-                1 if line_index == 0 => Some(paragraph.split('.').next().unwrap_or(paragraph)),
-                _ => None,
-            };
-            add_highlighted_text(ops, line, highlight, x, line_y, size, font);
+                let highlight = match paragraph_index {
+                    0 => Some(paper.key_name.as_str()),
+                    1 if line_index == 0 => Some(
+                        // Only the recovery identity is emphasized; the
+                        // surrounding sentence remains ordinary prose.
+                        paragraph
+                            .strip_prefix("This is ")
+                            .and_then(|rest| rest.split('.').next())
+                            .unwrap_or(paragraph),
+                    ),
+                    _ => None,
+                };
+                add_highlighted_text(
+                    ops,
+                    line,
+                    highlight,
+                    x,
+                    line_y,
+                    size,
+                    BuiltinFont::Helvetica,
+                );
+            }
             last_y = line_y;
             line_number += 1;
         }
         line_number += 1;
     }
     last_y
+}
+
+fn add_code_highlights(ops: &mut Vec<Op>, text: &str, x: f32, y: f32, size: f32) {
+    const CODE: [&str; 2] = ["Pkiboo", "'pkiboo key restore'"];
+    let mut remaining = text;
+    let mut fragments = Vec::new();
+    while !remaining.is_empty() {
+        let next = CODE
+            .iter()
+            .filter_map(|code| remaining.find(code).map(|index| (index, *code)))
+            .min_by_key(|(index, _)| *index);
+        match next {
+            Some((index, code)) => {
+                if index > 0 {
+                    fragments.push((&remaining[..index], BuiltinFont::Helvetica));
+                }
+                fragments.push((code, BuiltinFont::CourierBold));
+                remaining = &remaining[index + code.len()..];
+            }
+            None => {
+                fragments.push((remaining, BuiltinFont::Helvetica));
+                break;
+            }
+        }
+    }
+
+    ops.extend([
+        Op::StartTextSection,
+        Op::SetTextCursor {
+            pos: Point::new(Mm(x), Mm(y)),
+        },
+    ]);
+    for (fragment, font) in fragments {
+        ops.extend([
+            Op::SetFont {
+                font: PdfFontHandle::Builtin(font),
+                size: Pt(size),
+            },
+            Op::ShowText {
+                items: vec![TextItem::Text(fragment.into())],
+            },
+        ]);
+    }
+    ops.push(Op::EndTextSection);
 }
 
 fn add_highlighted_text(

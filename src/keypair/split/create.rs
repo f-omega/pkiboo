@@ -39,12 +39,12 @@ pub struct Args {
     #[arg(long, value_name = "DIR", default_value = ".")]
     paper_output_dir: PathBuf,
 
-    /// Filename prefix; produces PREFIX-SHARE.pdf instead of PAPER-NAME.pdf
+    /// Filename prefix; produces PREFIX-SHARE.pdf instead of PAPER-NAME-SHARE.pdf
     #[arg(long, value_name = "PREFIX")]
     paper_output_prefix: Option<String>,
 
     /// Maximum serialized-share bytes carried by each paper QR code
-    #[arg(long, value_name = "BYTES", default_value_t = 256)]
+    #[arg(long, value_name = "BYTES", default_value_t = 640)]
     paper_qr_bytes: usize,
 
     /// Allow different shares to be placed on the same medium
@@ -280,11 +280,7 @@ pub async fn main<Ui: crate::Ui>(
     let mut paper_records = Vec::with_capacity(rendered_papers.len());
     for (name, share, path, pdf) in rendered_papers {
         write_new_private_file(&path, &pdf)?;
-        eprintln!(
-            "PAPER ISSUED: share {} written to {}",
-            share.0,
-            path.display()
-        );
+        eprintln!("📄 Share {} written to {}", share.0, path.display());
         paper_records.push(Paper {
             name,
             key: key_name.clone(),
@@ -362,7 +358,7 @@ fn paper_output_filename(
 ) -> String {
     prefix
         .map(|prefix| format!("{prefix}-{}.pdf", share.0))
-        .unwrap_or_else(|| format!("{paper_name}.pdf"))
+        .unwrap_or_else(|| format!("{paper_name}-{}.pdf", share.0))
 }
 
 #[cfg(test)]
@@ -390,7 +386,7 @@ mod tests {
             allow_duplicate: false,
             paper_output_dir: PathBuf::from("."),
             paper_output_prefix: None,
-            paper_qr_bytes: 256,
+            paper_qr_bytes: 640,
         }
     }
 
@@ -449,14 +445,14 @@ mod tests {
     }
 
     #[test]
-    fn paper_filename_uses_name_without_prefix() {
+    fn paper_filename_uses_name_and_share_number_without_prefix() {
         assert_eq!(
             paper_output_filename(
                 &Name::new("six-word-paper-name-here-now".into()),
                 ShareNumber(4),
                 None
             ),
-            "six-word-paper-name-here-now.pdf"
+            "six-word-paper-name-here-now-4.pdf"
         );
     }
 

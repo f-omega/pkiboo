@@ -259,7 +259,9 @@ impl CliTaskOutcome {
         match self {
             Self::Complete => "✅",
             Self::Error => "❌",
-            Self::Cancelled => "⏹️",
+            // Keep an explicit trailing space: some terminals render the emoji
+            // variation selector flush against the following task text.
+            Self::Cancelled => "⏹️ ",
         }
     }
 }

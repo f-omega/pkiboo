@@ -68,13 +68,14 @@ pkiboo
 │   │   │   Never collect all shares in one ordinary
 │   │   │   local directory. --allow-duplicate explicitly permits assigning
 │   │   │   different shares to the same selected medium. With --paper, every
-│   │   │   share not assigned to media is emitted as a six-word-named PDF in
+│   │   │   share not assigned to media is emitted as a six-word-named PDF,
+│   │   │   suffixed with its share number, in
 │   │   │   --paper-output-dir (the current directory by default). With
 │   │   │   --paper-output-prefix <prefix>, filenames are instead formed as
 │   │   │   <prefix>-<share-number>.pdf. Issued papers are registered and
 │   │   │   existing PDF files are never replaced. Threshold and total shares
 │   │   │   default to 3 and 5. --paper-qr-bytes controls the maximum number
-│   │   │   of serialized-share bytes placed in each QR code (default 256).
+│   │   │   of serialized-share bytes placed in each QR code (default 640).
 │   │   │
 │   │   ├── backup --split <split> --share <number>
 │   │   │          --media <destination>... [--force]
