@@ -134,15 +134,13 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
 }
 
 fn instructions(p: &PaperShare) -> Vec<String> {
-    let other_paper = p.placements.paper.len().saturating_sub(1);
     vec![
-        format!("This is a share of a private key named {} which was created with the pkiboo utility.", p.key_name),
-        format!("This is share {} of {}. If anyone has {} other shares, they can combine these to produce this private key.", p.share.x, p.share.shamir.shares, p.share.shamir.threshold.saturating_sub(1)),
-        "You should store this in a safe place where unauthorized people cannot get it.".into(),
-        "You should not store this with any other shares of the same key. Doing so compromises the security of this process.".into(),
-        "In the event you lose all complete copies of the key, you can use the shares to reconstruct the key.".into(),
-        "Pkiboo can natively read this share. Run 'pkiboo key restore' to get instructions on how to restore this key.".into(),
-        format!("In addition to this share there are {other_paper} other paper shares and {} shares located on storage.", p.placements.storage.len()),
+        format!("This is a piece of a private key named {} which was created with the pkiboo utility.", p.key_name),
+        format!("There are {} other pieces. Anyone with access to {} pieces can combine them to construct this key",
+                p.share.x, p.share.shamir.threshold),
+        "You should store this piece away from other pieces of the same key. Storing keys together compromises the security of this process".into(),
+        "In the event you lose all complete copies of the key, pkiboo can be used to reconstruct it. Run pkiboo key restore to get instructions on how to restore this key".into(),
+        "To learn more about pkiboo, visit https://github.com/f-omega/pkiboo".into()
     ]
 }
 
