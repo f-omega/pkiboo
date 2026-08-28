@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::oneshot;
+use tokio::sync::mpsc;
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
 use webrtc::peer_connection::{PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCSessionDescription};
 
@@ -73,6 +74,17 @@ pub(crate) async fn answer_offer(
     Ok((pc, response))
 }
 
+/// Candidate events are sent separately so a browser can apply trickle ICE.
+/// The initial answer still contains the gathered SDP for compatibility.
+pub(crate) async fn answer_offer_with_trickle(
+    wormhole: &mut Wormhole,
+) -> Result<(impl PeerConnection, mpsc::Receiver<IceCandidate>), Box<dyn Error>> {
+    let (tx, rx) = mpsc::channel(32);
+    let handler = Arc::new(TrickleHandler { sender: tokio::sync::Mutex::new(tx) });
+    let (pc, _) = answer_offer(wormhole, handler.clone()).await?;
+    Ok((pc, rx))
+}
+
 pub(crate) async fn receive_images(wormhole: &mut Wormhole) -> Result<Vec<(String, Vec<u8>)>, Box<dyn Error>> {
     let (tx, rx) = oneshot::channel();
     let handler = Arc::new(ChannelHandler { sender: tokio::sync::Mutex::new(Some(tx)) });
@@ -114,6 +126,22 @@ impl PeerConnectionEventHandler for ChannelHandler {
     async fn on_data_channel(&self, channel: Arc<dyn DataChannel>) {
         if channel.label().await.ok().as_deref() == Some("pkiboo-paper-images") {
             if let Some(sender) = self.sender.lock().await.take() { let _ = sender.send(channel); }
+        }
+    }
+}
+
+struct TrickleHandler { sender: tokio::sync::Mutex<mpsc::Sender<IceCandidate>> }
+
+#[async_trait::async_trait]
+impl PeerConnectionEventHandler for TrickleHandler {
+    async fn on_ice_candidate(&self, event: webrtc::peer_connection::RTCPeerConnectionIceEvent) {
+        if let Ok(candidate) = event.candidate.to_json() {
+            let value = IceCandidate {
+                candidate: candidate.candidate,
+                sdp_mid: candidate.sdp_mid,
+                sdp_m_line_index: candidate.sdp_mline_index,
+            };
+            let _ = self.sender.lock().await.send(value).await;
         }
     }
 }

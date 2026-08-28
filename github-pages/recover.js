@@ -1,4 +1,5 @@
 import { PkibooWebRtcSender } from "./webrtc-sender.js";
+import initWormhole, { create_signaling } from "./wormhole/pkiboo_browser_wormhole.js";
 
 const status = document.querySelector("#status");
 const ready = document.querySelector("#ready");
@@ -13,6 +14,7 @@ const cameraCapture = document.querySelector("#camera-capture");
 const cameraFrame = document.querySelector("#camera-frame");
 let selected = [];
 let cameraStream;
+let wormholeReady;
 
 function wormholeCode() {
   const params = new URLSearchParams(location.hash.slice(1));
@@ -32,10 +34,7 @@ async function send(files, code) {
   transfer.hidden = false;
   document.querySelector("#filename").textContent = `${files.length} image${files.length === 1 ? "" : "s"}`;
   status.textContent = "Joining the encrypted Wormhole…";
-  if (!window.createMagicWormholeSignaling) {
-    throw new Error("This page needs the pkiboo Magic Wormhole signaling adapter.");
-  }
-  const signaling = await window.createMagicWormholeSignaling(code);
+  const signaling = await (wormholeReady || (wormholeReady = initWormhole().then(() => create_signaling(code))));
   status.textContent = "Establishing the WebRTC data channel…";
   const sender = await PkibooWebRtcSender.connect(signaling, window.PKIBOO_RTC_CONFIG || {});
   status.textContent = "Sending images…";
