@@ -455,6 +455,22 @@ impl Task for CliTask {
         self.progress_bar
             .set_message(format_task_message(&self.title, Some(&message)));
     }
+
+    async fn set_progress(&self, completed: usize, total: usize) {
+        if total == 0 {
+            return;
+        }
+        self.progress_bar.disable_steady_tick();
+        self.progress_bar.set_length(total as u64);
+        self.progress_bar.set_position(completed.min(total) as u64);
+        self.progress_bar.set_style(
+            indicatif::ProgressStyle::with_template(
+                "{prefix:.dim} {wide_bar:.cyan/blue} {percent:>3}% {msg}",
+            )
+            .expect("valid determinate task progress template")
+            .progress_chars("━━╸"),
+        );
+    }
 }
 
 impl Presenter for CliTask {

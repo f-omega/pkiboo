@@ -60,6 +60,19 @@ impl PaperInput {
         }
         loop {
             let scan = scan_directory(&self.directory)?;
+            task.set_progress(scan.loaded_pieces, scan.total_pieces)
+                .await;
+            let progress = if scan.discovered_shares == 0 {
+                String::new()
+            } else {
+                format!(
+                    "{} of {} shares complete; {} of {} pieces loaded",
+                    scan.complete_shares,
+                    scan.discovered_shares,
+                    scan.loaded_pieces,
+                    scan.total_pieces
+                )
+            };
             for problem in scan.problems {
                 if self.reported.insert(problem.clone()) {
                     crate::cli_common::warn(problem);
@@ -69,7 +82,7 @@ impl PaperInput {
                 if self.emitted.insert(complete.hash.clone()) {
                     complete.paper.share.verify()?;
                     task.set_message(format!(
-                        "Read complete paper share {} from {} QR chunk{}",
+                        "Read complete paper share {} from {} QR chunk{} ({progress})",
                         complete.paper.paper_name,
                         complete.pieces,
                         if complete.pieces == 1 { "" } else { "s" }
@@ -79,12 +92,16 @@ impl PaperInput {
                 }
             }
             task.set_message(if scan.waiting.is_empty() {
-                format!(
-                    "Waiting for pkiboo QR chunks in {}",
-                    self.directory.display()
-                )
+                if progress.is_empty() {
+                    format!(
+                        "Waiting for pkiboo QR chunks in {}",
+                        self.directory.display()
+                    )
+                } else {
+                    progress
+                }
             } else {
-                format!("Waiting for {}", scan.waiting.join("; "))
+                format!("{progress}; waiting for {}", scan.waiting.join("; "))
             })
             .await;
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -101,6 +118,10 @@ struct Scan {
     complete: Vec<Complete>,
     waiting: Vec<String>,
     problems: Vec<String>,
+    discovered_shares: usize,
+    complete_shares: usize,
+    loaded_pieces: usize,
+    total_pieces: usize,
 }
 #[derive(Default)]
 struct Assembly {
@@ -190,7 +211,12 @@ fn scan_directory(directory: &Path) -> Result<Scan, Box<dyn Error>> {
     }
     let mut complete = Vec::new();
     let mut waiting = Vec::new();
+    let discovered_shares = groups.len();
+    let mut loaded_pieces = 0usize;
+    let mut total_pieces = 0usize;
     for ((paper_name, hash, share, _), group) in groups {
+        loaded_pieces += group.chunks.len().min(group.pieces);
+        total_pieces += group.pieces;
         if group.invalid {
             problems.push(format!(
                 "Conflicting QR chunks found for paper {paper_name}"
@@ -233,10 +259,15 @@ fn scan_directory(directory: &Path) -> Result<Scan, Box<dyn Error>> {
             )),
         }
     }
+    let complete_shares = complete.len();
     Ok(Scan {
         complete,
         waiting,
         problems,
+        discovered_shares,
+        complete_shares,
+        loaded_pieces,
+        total_pieces,
     })
 }
 
@@ -378,6 +409,10 @@ mod tests {
         let scan = scan_directory(&dir).unwrap();
         assert!(scan.complete.is_empty());
         assert!(scan.waiting.join(" ").contains("chunks 2"));
+        assert_eq!(scan.discovered_shares, 1);
+        assert_eq!(scan.complete_shares, 0);
+        assert_eq!(scan.loaded_pieces, 1);
+        assert_eq!(scan.total_pieces, 2);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -415,6 +450,8 @@ mod tests {
         assert!(scan.problems.is_empty(), "{:?}", scan.problems);
         assert!(scan.waiting.is_empty(), "{:?}", scan.waiting);
         assert_eq!(scan.complete.len(), 1);
+        assert_eq!(scan.complete_shares, 1);
+        assert_eq!(scan.loaded_pieces, scan.total_pieces);
         scan.complete[0].paper.share.verify().unwrap();
         assert_eq!(
             yaml_serde::to_string(&scan.complete[0].paper).unwrap(),

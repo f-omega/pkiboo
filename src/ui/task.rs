@@ -18,6 +18,8 @@ pub trait Task:
     TaskStarter<TaskHandle = Self> + super::PaneStarter + super::Presenter + Send + Sync + Clone
 {
     async fn set_message(&self, message: String);
+    /// Set determinate progress for work whose total becomes known at runtime.
+    async fn set_progress(&self, completed: usize, total: usize);
     async fn mark_complete(&self);
     async fn mark_error(&self, message: String);
     async fn mark_cancelled(&self, message: String);
