@@ -64,6 +64,19 @@ pub(crate) fn artifact_name(value: impl std::fmt::Display) -> String {
     styled_semantic(value, SemanticColor::Artifact)
 }
 
+pub(crate) fn success_mark() -> String {
+    styled_status_mark("✓", AnsiColor::Green)
+}
+
+fn styled_status_mark(mark: &str, color: AnsiColor) -> String {
+    if std::io::stderr().is_terminal() {
+        let style = Style::new().bold().fg_color(Some(color.into()));
+        format!("{style}{mark}{style:#}")
+    } else {
+        mark.to_owned()
+    }
+}
+
 fn style_table_value(column: &str, value: String) -> String {
     let column = column.to_ascii_lowercase();
     if column.contains("media") || column == "label" || column == "paper" {
@@ -297,7 +310,7 @@ impl CliTasks {
         // gets rendered again as later tasks update.
         let _ = self.progress.println(format!(
             "{indent}{} {}",
-            outcome.symbol(),
+            outcome.styled_symbol(),
             format_terminal_task(title, detail, outcome)
         ));
     }
@@ -311,14 +324,13 @@ enum CliTaskOutcome {
 }
 
 impl CliTaskOutcome {
-    fn symbol(self) -> &'static str {
-        match self {
-            Self::Complete => "✅",
-            Self::Error => "❌",
-            // Keep an explicit trailing space: some terminals render the emoji
-            // variation selector flush against the following task text.
-            Self::Cancelled => "⏹️ ",
-        }
+    fn styled_symbol(self) -> String {
+        let (symbol, color) = match self {
+            Self::Complete => ("✓", AnsiColor::Green),
+            Self::Error => ("✗", AnsiColor::Red),
+            Self::Cancelled => ("■", AnsiColor::Yellow),
+        };
+        styled_status_mark(symbol, color)
     }
 }
 

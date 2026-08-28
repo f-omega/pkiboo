@@ -171,7 +171,10 @@ pub async fn main<Ui: crate::Ui>(
                 .into(),
         );
     }
-    eprintln!("✅ Verified recovery and reconstruction from generated shares.");
+    eprintln!(
+        "{} Verified recovery and reconstruction from generated shares.",
+        crate::cli_common::success_mark()
+    );
 
     let storage_locations = destinations
         .media

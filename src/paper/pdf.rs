@@ -35,9 +35,9 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
             shares: paper.share.shamir.shares,
             piece: index + 1,
             pieces: data_pages,
-            data: STANDARD.encode(chunk),
+            data: chunk.to_vec(),
         };
-        let qr_bytes = yaml_serde::to_string(&segment)?.into_bytes();
+        let qr_bytes = crate::paper::input::encode_qr_segment(&segment)?;
         let qr = QrCode::with_error_correction_level(&qr_bytes, EcLevel::M)?;
         let mut ops = page_header(
             paper,
@@ -47,7 +47,7 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
             &created_on,
         );
         let prose_bottom =
-            add_instruction_paragraphs(&mut ops, paper, &prose, 18.0, 261.0, 9.2, 4.5);
+            add_instruction_paragraphs(&mut ops, paper, &prose, 24.0, 261.0, 9.2, 4.5);
         let divider_y = prose_bottom - 3.0;
         add_content_rule(&mut ops, divider_y);
         let qr_top = divider_y - 5.0;
@@ -60,14 +60,14 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
             qr_bottom - 8.0,
             7.0,
             3.5,
-            92,
+            108,
             BuiltinFont::Courier,
         );
         pages.push(PdfPage::new(Mm(210.0), Mm(297.0), ops));
     }
 
     let mut ops = page_header(paper, total_pages, total_pages, None, &created_on);
-    let prose_bottom = add_instruction_paragraphs(&mut ops, paper, &prose, 18.0, 261.0, 9.2, 4.5);
+    let prose_bottom = add_instruction_paragraphs(&mut ops, paper, &prose, 24.0, 261.0, 9.2, 4.5);
     let mut y = prose_bottom - 3.0;
     add_content_rule(&mut ops, y);
     y -= 10.0;
@@ -156,7 +156,7 @@ fn page_header(
     let mut ops = Vec::new();
     add_centered_text(
         &mut ops,
-        &p.paper_name.to_string(),
+        &paper_split_name(p),
         282.0,
         18.0,
         BuiltinFont::HelveticaBold,
@@ -170,7 +170,7 @@ fn page_header(
     };
     add_centered_text(&mut ops, &identity, 275.0, 10.0, BuiltinFont::Helvetica);
     ops.push(Op::SetOutlineThickness { pt: Pt(1.2) });
-    ops.push(Op::SetOutlineColor { col: header_teal() });
+    ops.push(Op::SetOutlineColor { col: rule_color() });
     ops.push(Op::DrawLine {
         line: Line {
             points: vec![line_point(LEFT, 268.0), line_point(RIGHT, 268.0)],
@@ -206,6 +206,14 @@ fn page_header(
     ops
 }
 
+fn paper_split_name(paper: &PaperShare) -> String {
+    let paper_name = paper.paper_name.to_string();
+    paper_name
+        .strip_suffix(&format!("-{}", paper.share.x))
+        .unwrap_or(&paper_name)
+        .to_owned()
+}
+
 fn add_instruction_paragraphs(
     ops: &mut Vec<Op>,
     paper: &PaperShare,
@@ -218,7 +226,7 @@ fn add_instruction_paragraphs(
     let mut line_number = 0usize;
     let mut last_y = y;
     for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
-        for (line_index, line) in wrap(paragraph, 105).iter().enumerate() {
+        for (line_index, line) in wrap(paragraph, 98).iter().enumerate() {
             let line_y = y - line_number as f32 * leading;
             if paragraph_index == 5 {
                 add_code_highlights(ops, line, x, line_y, size);
@@ -348,22 +356,16 @@ fn add_highlighted_text(
 }
 
 fn identity_blue() -> Color {
-    Color::Rgb(Rgb::new(0.16, 0.34, 0.72, None))
+    Color::Rgb(Rgb::new(0.25, 0.38, 0.60, None))
 }
 
-fn header_teal() -> Color {
-    Color::Rgb(Rgb::new(0.0, 0.52, 0.60, None))
-}
-
-fn content_periwinkle() -> Color {
-    Color::Rgb(Rgb::new(0.40, 0.43, 0.76, None))
+fn rule_color() -> Color {
+    Color::Rgb(Rgb::new(0.30, 0.46, 0.54, None))
 }
 
 fn add_content_rule(ops: &mut Vec<Op>, y: f32) {
     ops.extend([
-        Op::SetOutlineColor {
-            col: content_periwinkle(),
-        },
+        Op::SetOutlineColor { col: rule_color() },
         Op::SetOutlineThickness { pt: Pt(1.2) },
         Op::DrawLine {
             line: Line {

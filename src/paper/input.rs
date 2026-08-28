@@ -1,6 +1,5 @@
 //! Asynchronous ingestion of numbered paper-share QR chunks from image files.
 use crate::{keypair::split::share::PaperShare, ui::Task};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -9,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-pub const PAPER_QR_FORMAT: &str = "pkiboo-paper-share-v1";
+pub const PAPER_QR_FORMAT: &str = "pkiboo-paper-share";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PaperQrSegment {
@@ -20,8 +19,17 @@ pub struct PaperQrSegment {
     pub shares: u8,
     pub piece: usize,
     pub pieces: usize,
-    /// Base64 of this piece of the serialized `PaperShare`.
-    pub data: String,
+    /// Raw bytes from this piece of the serialized YAML `PaperShare`.
+    #[serde(with = "serde_bytes")]
+    pub data: Vec<u8>,
+}
+
+pub fn encode_qr_segment(segment: &PaperQrSegment) -> Result<Vec<u8>, Box<dyn Error>> {
+    Ok(bson::serialize_to_vec(segment)?)
+}
+
+fn decode_qr_segment(bytes: &[u8]) -> Result<PaperQrSegment, Box<dyn Error>> {
+    Ok(bson::deserialize_from_slice(bytes)?)
 }
 
 #[derive(Default)]
@@ -127,9 +135,10 @@ fn scan_directory(directory: &Path) -> Result<Scan, Box<dyn Error>> {
         let mut matched = false;
         let mut decode_errors = Vec::new();
         for grid in grids {
-            match grid.decode() {
-                Ok((_, content)) => {
-                    let segment = match yaml_serde::from_str::<PaperQrSegment>(&content) {
+            let mut content = Vec::new();
+            match grid.decode_to(&mut content) {
+                Ok(_) => {
+                    let segment = match decode_qr_segment(&content) {
                         Ok(s) if s.format == PAPER_QR_FORMAT => s,
                         _ => continue,
                     };
@@ -141,16 +150,7 @@ fn scan_directory(directory: &Path) -> Result<Scan, Box<dyn Error>> {
                         ));
                         continue;
                     }
-                    let data = match STANDARD.decode(&segment.data) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            problems.push(format!(
-                                "Invalid pkiboo QR chunk in {}: {e}",
-                                path.display()
-                            ));
-                            continue;
-                        }
-                    };
+                    let data = segment.data;
                     let group = groups
                         .entry((
                             segment.paper,
@@ -309,7 +309,7 @@ mod tests {
             .chunks(900)
             .enumerate()
             .map(|(index, data)| {
-                yaml_serde::to_string(&PaperQrSegment {
+                encode_qr_segment(&PaperQrSegment {
                     format: PAPER_QR_FORMAT.into(),
                     paper: paper.paper_name.to_string(),
                     document_hash: hash.clone(),
@@ -317,10 +317,9 @@ mod tests {
                     shares: paper.share.shamir.shares,
                     piece: index + 1,
                     pieces,
-                    data: STANDARD.encode(data),
+                    data: data.to_vec(),
                 })
                 .unwrap()
-                .into_bytes()
             })
             .collect()
     }
@@ -373,12 +372,9 @@ mod tests {
             shares: 5,
             piece: 1,
             pieces: 2,
-            data: STANDARD.encode(data),
+            data: data.to_vec(),
         };
-        write_qr(
-            &dir.join("page.png"),
-            yaml_serde::to_string(&segment).unwrap().as_bytes(),
-        );
+        write_qr(&dir.join("page.png"), &encode_qr_segment(&segment).unwrap());
         let scan = scan_directory(&dir).unwrap();
         assert!(scan.complete.is_empty());
         assert!(scan.waiting.join(" ").contains("chunks 2"));
