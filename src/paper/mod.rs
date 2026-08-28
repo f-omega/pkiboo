@@ -8,10 +8,7 @@ mod meta;
 pub(crate) mod pdf;
 mod show;
 mod verify;
-#[cfg(feature = "wormhole")]
-mod wormhole;
-#[cfg(feature = "wormhole")]
-pub(crate) mod webrtc;
+// WebRTC signaling prototype is intentionally not wired into the CLI.
 
 #[derive(clap::Args)]
 pub struct Args {

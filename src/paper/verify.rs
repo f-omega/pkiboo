@@ -4,20 +4,8 @@ use std::{error::Error, path::PathBuf};
 #[derive(clap::Args)]
 pub struct Args {
     /// Directory watched for images containing numbered paper-share QR chunks
-    #[cfg_attr(
-        feature = "wormhole",
-        arg(long, value_name = "DIR", required_unless_present = "magic_wormhole")
-    )]
-    #[cfg_attr(
-        not(feature = "wormhole"),
-        arg(long, value_name = "DIR", required = true)
-    )]
-    paper_input: Option<PathBuf>,
-
-    /// Accept a paper-share image through a generated Magic Wormhole link
-    #[cfg(feature = "wormhole")]
-    #[arg(long)]
-    magic_wormhole: bool,
+    #[arg(long, value_name = "DIR", required = true)]
+    paper_input: PathBuf,
 }
 
 pub async fn main<Ui: crate::Ui>(
@@ -30,8 +18,6 @@ pub async fn main<Ui: crate::Ui>(
         .ui()
         .task("Wait for a complete paper share".into(), async |task| {
             let mut input = super::input::PaperInput::new(args.paper_input.clone());
-            #[cfg(feature = "wormhole")]
-            input.enable_magic_wormhole(args.magic_wormhole);
             input.next_share(&task).await
         })
         .await?;
