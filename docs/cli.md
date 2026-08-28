@@ -4,7 +4,8 @@ Pkiboo's primary objects are certificates, keys, and media. A certificate is not
 classified as a root or intermediate by its CLI object type: its issuer
 relationship determines its place in the certificate hierarchy.
 
-Recovery splits belong to keys and are managed beneath `key split`. Remote
+Recovery splits belong to keys and are managed beneath `key share` (`key split`
+remains an alias). Remote
 storage is a media backend, not a separate object type. Locations and other
 operator-defined classifications are ordinary metadata.
 
@@ -60,11 +61,24 @@ pkiboo
 │   │   Make another complete copy of a key directly from its current media
 │   │   to explicitly selected destination media.
 │   │
-│   ├── split
+│   ├── share (alias: split)
 │   │   ├── create
 │   │   │   Create a threshold recovery set and place each share onto an
 │   │   │   independent destination. Never collect all shares in one ordinary
-│   │   │   local directory.
+│   │   │   local directory. --allow-duplicate explicitly permits assigning
+│   │   │   different shares to the same selected medium. With --paper, every
+│   │   │   share not assigned to media is emitted as a six-word-named PDF in
+│   │   │   --paper-output-dir (the current directory by default). With
+│   │   │   --paper-output-prefix <prefix>, filenames are instead formed as
+│   │   │   <prefix>-<share-number>.pdf. Issued papers are registered and
+│   │   │   existing PDF files are never replaced.
+│   │   │
+│   │   ├── backup --split <split> --share <number>
+│   │   │          --media <destination>... [--force]
+│   │   │   Copy one verified numbered share to alternate media. Reject
+│   │   │   duplicate destinations and share colocation unless explicitly
+│   │   │   forced. Colocation with a complete copy also requires --force and
+│   │   │   is reported as false redundancy.
 │   │   │
 │   │   ├── list
 │   │   │   List recovery splits, optionally restricted to one key.
@@ -73,19 +87,27 @@ pkiboo
 │   │   │   Show a split's threshold, share placements, metadata, and whether
 │   │   │   quorum is achievable.
 │   │   │
-│   │   ├── verify
-│   │   │   Verify split metadata and optionally exercise reconstruction
-│   │   │   without retaining the reconstructed key.
+│   │   ├── verify --split <split> [--media <media>...] [--paper <paper>...]
+│   │   │          [--reconstruction]
+│   │   │   Wait concurrently for the selected media, or every recorded share
+│   │   │   medium by default, and validate the manifest plus Feldman/Pedersen
+│   │   │   commitments. At quorum, reconstruct and compare with the managed
+│   │   │   public key. --reconstruction requires quorum. Paper verification
+│   │   │   is reserved for a future prompting and QR-scanning workflow.
 │   │   │
 │   │   ├── meta
 │   │   │   Show, set, or remove metadata on a recovery split.
 │   │   │
-│   │   └── retire
-│   │       Stop counting a recovery split as an active recovery mechanism.
 │   │
 │   ├── verify
 │   │   Verify a complete key copy or recovery path against the expected
 │   │   public-key fingerprint.
+│   │
+│   ├── restore --key <key> --to <media> [--force]
+│   │   Wait concurrently for a recovery split's media, verify distinct shares,
+│   │   restore and validate the private key, and write a complete copy to the
+│   │   trusted destination. --force overrides destination trust and an existing
+│   │   recorded complete copy. Paper-assisted restore is not yet supported.
 │   │
 │   └── meta
 │       Show, set, or remove metadata on a key.
@@ -144,14 +166,9 @@ pkiboo
     │   Show what a paper artifact contains, along with its metadata and
     │   verification state.
     │
-    ├── scan
-    │   Scan or read a printed pkiboo artifact and contribute it to recovery.
-    │
-    ├── import
-    │   Import a generated PDF or scanned file instead of using a live scanner.
-    │
     ├── verify
-    │   Verify that a paper artifact is readable and internally valid.
+    │   Verify that one paper share is cryptographically valid. This does not
+    │   reconstruct the recovery secret or private key.
     │
     ├── meta
     │   Show, set, or remove metadata on a paper artifact. Its physical storage

@@ -323,7 +323,7 @@ Pkiboo additionally supports Shamir Secret Sharing for catastrophic recovery.
 For example:
 
 ```text
-                private key
+         random recovery secret
                     │
                   split
                     │
@@ -334,7 +334,11 @@ For example:
              threshold = 3
 ```
 
-Any three shares can reconstruct the private key.
+Any three verified shares reconstruct the recovery secret, which decrypts an
+authenticated copy of the private-key PEM stored in every share envelope. The
+private key itself is never passed to the secret-sharing crate. Each share
+contains Feldman and hiding Pedersen commitments over four P-256 scalar
+components, whose canonical encodings form the 128-byte recovery secret.
 
 This is distinct from ordinary complete-key backups.
 
@@ -776,7 +780,10 @@ An implementation should preserve these invariants:
 3. **Private keys are only written to explicitly selected destinations.**
 4. **Operations requiring a private key verify that the supplied key is the expected one.**
 5. **Recovery shares are distributed independently.**
-6. **Pkiboo never casually materializes all Shamir shares together.**
+6. **Pkiboo never persists all recovery shares together.** Creation briefly
+   holds the generated shares in memory for a mandatory ceremony self-test:
+   verify every commitment, reconstruct and decrypt, then compare the recovered
+   private-key PEM byte-for-byte before writing any destination.
 7. **A reconstructed key is temporary unless explicitly restored.**
 8. **CSRs are untrusted input.**
 9. **CA policy, not CSR contents, determines granted authority.**
