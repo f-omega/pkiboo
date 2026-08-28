@@ -7,7 +7,12 @@ const picker = document.querySelector("#image");
 const sendButton = document.querySelector("#send");
 const selection = document.querySelector("#selection");
 const progress = document.querySelector("#progress");
+const camera = document.querySelector("#camera");
+const cameraStart = document.querySelector("#camera-start");
+const cameraCapture = document.querySelector("#camera-capture");
+const cameraFrame = document.querySelector("#camera-frame");
 let selected = [];
+let cameraStream;
 
 function wormholeCode() {
   const params = new URLSearchParams(location.hash.slice(1));
@@ -52,6 +57,28 @@ try {
     picker.value = "";
     selection.textContent = `${selected.length} image${selected.length === 1 ? "" : "s"} ready to send.`;
     sendButton.disabled = selected.length === 0;
+  });
+  cameraStart.addEventListener("click", async () => {
+    try {
+      cameraStream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: "environment"}}, audio: false});
+      camera.srcObject = cameraStream;
+      camera.hidden = false;
+      cameraStart.hidden = true;
+      cameraCapture.hidden = false;
+      status.textContent = "Point the camera at a paper-share QR code, then capture it.";
+    } catch (error) { fail(new Error(`Camera access failed: ${error.message || error}`)); }
+  });
+  cameraCapture.addEventListener("click", () => {
+    if (!camera.videoWidth) return;
+    cameraFrame.width = camera.videoWidth;
+    cameraFrame.height = camera.videoHeight;
+    cameraFrame.getContext("2d").drawImage(camera, 0, 0);
+    cameraFrame.toBlob(blob => {
+      if (!blob) return;
+      selected.push(new File([blob], `camera-${selected.length + 1}.jpg`, {type: "image/jpeg"}));
+      selection.textContent = `${selected.length} image${selected.length === 1 ? "" : "s"} ready to send.`;
+      sendButton.disabled = false;
+    }, "image/jpeg", 0.95);
   });
   sendButton.addEventListener("click", () => {
     if (selected.length === 0) return;

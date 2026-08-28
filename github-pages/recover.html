@@ -17,6 +17,12 @@
         <span>Add or photograph paper-share images</span>
         <input id="image" type="file" accept="image/*" capture="environment" multiple>
       </label>
+      <div class="camera">
+        <video id="camera" autoplay playsinline hidden></video>
+        <button id="camera-start" type="button">Use camera</button>
+        <button id="camera-capture" type="button" hidden>Capture image</button>
+        <canvas id="camera-frame" hidden></canvas>
+      </div>
       <p id="selection">No images selected yet.</p>
       <button id="send" type="button" disabled>Send selected images</button>
       <p class="code">Wormhole <strong id="code"></strong></p>
