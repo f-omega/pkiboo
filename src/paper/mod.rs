@@ -1,5 +1,6 @@
 use std::error::Error;
 
+pub(crate) mod assembler;
 mod forget;
 pub(crate) mod input;
 mod list;

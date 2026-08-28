@@ -1,41 +1,21 @@
 //! Asynchronous ingestion of numbered paper-share QR chunks from image files.
+use super::assembler::{AssemblyEvent, CompletedShare, ShareAssembler};
+pub use super::assembler::{
+    PAPER_QR_FORMAT, PaperQrSegment, decode_qr_segment, document_hash, encode_qr_segment,
+};
 use crate::{keypair::split::share::PaperShare, ui::Task};
-use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashSet, VecDeque},
     error::Error,
     path::{Path, PathBuf},
     time::Duration,
 };
 
-pub const PAPER_QR_FORMAT: &str = "pkiboo-paper-share";
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PaperQrSegment {
-    pub format: String,
-    pub paper: String,
-    pub document_hash: String,
-    pub share: u8,
-    pub shares: u8,
-    pub piece: usize,
-    pub pieces: usize,
-    /// Raw bytes from this piece of the serialized YAML `PaperShare`.
-    #[serde(with = "serde_bytes")]
-    pub data: Vec<u8>,
-}
-
-pub fn encode_qr_segment(segment: &PaperQrSegment) -> Result<Vec<u8>, Box<dyn Error>> {
-    Ok(bson::serialize_to_vec(segment)?)
-}
-
-fn decode_qr_segment(bytes: &[u8]) -> Result<PaperQrSegment, Box<dyn Error>> {
-    Ok(bson::deserialize_from_slice(bytes)?)
-}
-
 #[derive(Default)]
 pub struct PaperInput {
     directory: PathBuf,
-    emitted: HashSet<String>,
+    assembler: ShareAssembler,
+    pending: VecDeque<CompletedShare>,
     reported: HashSet<String>,
 }
 
@@ -59,7 +39,18 @@ impl PaperInput {
             .into());
         }
         loop {
-            let scan = scan_directory(&self.directory)?;
+            if let Some(complete) = self.pending.pop_front() {
+                complete.paper.share.verify()?;
+                task.set_message(format!(
+                    "Read complete paper share {} from {} QR chunk{}",
+                    complete.paper.paper_name,
+                    complete.pieces,
+                    if complete.pieces == 1 { "" } else { "s" }
+                ))
+                .await;
+                return Ok(complete.paper);
+            }
+            let scan = scan_directory(&self.directory, &mut self.assembler)?;
             task.set_progress(scan.loaded_pieces, scan.total_pieces)
                 .await;
             let progress = if scan.discovered_shares == 0 {
@@ -78,18 +69,17 @@ impl PaperInput {
                     crate::cli_common::warn(problem);
                 }
             }
-            for complete in scan.complete {
-                if self.emitted.insert(complete.hash.clone()) {
-                    complete.paper.share.verify()?;
-                    task.set_message(format!(
-                        "Read complete paper share {} from {} QR chunk{} ({progress})",
-                        complete.paper.paper_name,
-                        complete.pieces,
-                        if complete.pieces == 1 { "" } else { "s" }
-                    ))
-                    .await;
-                    return Ok(complete.paper);
-                }
+            self.pending.extend(scan.complete);
+            if let Some(complete) = self.pending.pop_front() {
+                complete.paper.share.verify()?;
+                task.set_message(format!(
+                    "Read complete paper share {} from {} QR chunk{} ({progress})",
+                    complete.paper.paper_name,
+                    complete.pieces,
+                    if complete.pieces == 1 { "" } else { "s" }
+                ))
+                .await;
+                return Ok(complete.paper);
             }
             task.set_message(if scan.waiting.is_empty() {
                 if progress.is_empty() {
@@ -109,13 +99,8 @@ impl PaperInput {
     }
 }
 
-struct Complete {
-    hash: String,
-    paper: PaperShare,
-    pieces: usize,
-}
 struct Scan {
-    complete: Vec<Complete>,
+    complete: Vec<CompletedShare>,
     waiting: Vec<String>,
     problems: Vec<String>,
     discovered_shares: usize,
@@ -123,16 +108,12 @@ struct Scan {
     loaded_pieces: usize,
     total_pieces: usize,
 }
-#[derive(Default)]
-struct Assembly {
-    pieces: usize,
-    chunks: BTreeMap<usize, Vec<u8>>,
-    invalid: bool,
-}
-
-fn scan_directory(directory: &Path) -> Result<Scan, Box<dyn Error>> {
-    let mut groups = HashMap::<(String, String, u8, u8), Assembly>::new();
+fn scan_directory(
+    directory: &Path,
+    assembler: &mut ShareAssembler,
+) -> Result<Scan, Box<dyn Error>> {
     let mut problems = Vec::new();
+    let mut complete = Vec::new();
     let mut paths = std::fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
     paths.sort_by_key(|e| e.path());
     for entry in paths {
@@ -164,34 +145,12 @@ fn scan_directory(directory: &Path) -> Result<Scan, Box<dyn Error>> {
                         _ => continue,
                     };
                     matched = true;
-                    if segment.piece == 0 || segment.pieces == 0 || segment.piece > segment.pieces {
-                        problems.push(format!(
-                            "Invalid pkiboo QR chunk numbering in {}",
-                            path.display()
-                        ));
-                        continue;
-                    }
-                    let data = segment.data;
-                    let group = groups
-                        .entry((
-                            segment.paper,
-                            segment.document_hash,
-                            segment.share,
-                            segment.shares,
-                        ))
-                        .or_default();
-                    if group.pieces != 0 && group.pieces != segment.pieces {
-                        group.invalid = true;
-                    }
-                    group.pieces = segment.pieces;
-                    if group
-                        .chunks
-                        .get(&segment.piece)
-                        .is_some_and(|old| old != &data)
-                    {
-                        group.invalid = true;
-                    } else {
-                        group.chunks.insert(segment.piece, data);
+                    match assembler.ingest(segment) {
+                        AssemblyEvent::ShareCompleted(share) => complete.push(share),
+                        AssemblyEvent::Problem(problem) => {
+                            problems.push(format!("{}: {problem}", path.display()))
+                        }
+                        AssemblyEvent::PieceAccepted | AssemblyEvent::DuplicateIgnored => {}
                     }
                 }
                 Err(e) => decode_errors.push(e.to_string()),
@@ -209,65 +168,15 @@ fn scan_directory(directory: &Path) -> Result<Scan, Box<dyn Error>> {
             });
         }
     }
-    let mut complete = Vec::new();
-    let mut waiting = Vec::new();
-    let discovered_shares = groups.len();
-    let mut loaded_pieces = 0usize;
-    let mut total_pieces = 0usize;
-    for ((paper_name, hash, share, _), group) in groups {
-        loaded_pieces += group.chunks.len().min(group.pieces);
-        total_pieces += group.pieces;
-        if group.invalid {
-            problems.push(format!(
-                "Conflicting QR chunks found for paper {paper_name}"
-            ));
-            continue;
-        }
-        let missing = (1..=group.pieces)
-            .filter(|n| !group.chunks.contains_key(n))
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            waiting.push(format!(
-                "paper {paper_name} chunks {}",
-                missing
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-            continue;
-        }
-        let bytes = (1..=group.pieces)
-            .flat_map(|n| group.chunks[&n].clone())
-            .collect::<Vec<_>>();
-        if document_hash(&bytes)? != hash {
-            problems.push(format!(
-                "QR chunks for paper {paper_name} failed their document hash"
-            ));
-            continue;
-        }
-        match yaml_serde::from_slice::<PaperShare>(&bytes) {
-            Ok(p) if p.paper_name.to_string() == paper_name && p.share.x == share => {
-                complete.push(Complete {
-                    hash,
-                    paper: p,
-                    pieces: group.pieces,
-                })
-            }
-            _ => problems.push(format!(
-                "QR chunks for paper {paper_name} do not contain a valid paper share"
-            )),
-        }
-    }
-    let complete_shares = complete.len();
+    let progress = assembler.progress();
     Ok(Scan {
         complete,
-        waiting,
+        waiting: assembler.waiting(),
         problems,
-        discovered_shares,
-        complete_shares,
-        loaded_pieces,
-        total_pieces,
+        discovered_shares: progress.discovered_shares,
+        complete_shares: progress.complete_shares,
+        loaded_pieces: progress.loaded_pieces,
+        total_pieces: progress.total_pieces,
     })
 }
 
@@ -289,15 +198,6 @@ fn is_image(path: &Path) -> bool {
         )
     })
 }
-pub fn document_hash(bytes: &[u8]) -> Result<String, Box<dyn Error>> {
-    Ok(
-        openssl::hash::hash(openssl::hash::MessageDigest::sha256(), bytes)?
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,7 +306,7 @@ mod tests {
             data: data.to_vec(),
         };
         write_qr(&dir.join("page.png"), &encode_qr_segment(&segment).unwrap());
-        let scan = scan_directory(&dir).unwrap();
+        let scan = scan_directory(&dir, &mut ShareAssembler::default()).unwrap();
         assert!(scan.complete.is_empty());
         assert!(scan.waiting.join(" ").contains("chunks 2"));
         assert_eq!(scan.discovered_shares, 1);
@@ -424,7 +324,7 @@ mod tests {
         image::GrayImage::from_pixel(200, 200, image::Luma([255]))
             .save(dir.join("blank.png"))
             .unwrap();
-        let scan = scan_directory(&dir).unwrap();
+        let scan = scan_directory(&dir, &mut ShareAssembler::default()).unwrap();
         assert!(
             scan.problems
                 .iter()
@@ -446,7 +346,7 @@ mod tests {
         let expected = paper_share("one-two-three-four-five-six", shares[0].clone());
         write_paper_qrs(&directory, &expected);
 
-        let scan = scan_directory(&directory).unwrap();
+        let scan = scan_directory(&directory, &mut ShareAssembler::default()).unwrap();
         assert!(scan.problems.is_empty(), "{:?}", scan.problems);
         assert!(scan.waiting.is_empty(), "{:?}", scan.waiting);
         assert_eq!(scan.complete.len(), 1);
@@ -479,7 +379,7 @@ mod tests {
             write_paper_qrs(&directory, &paper);
         }
 
-        let scan = scan_directory(&directory).unwrap();
+        let scan = scan_directory(&directory, &mut ShareAssembler::default()).unwrap();
         assert!(scan.problems.is_empty(), "{:?}", scan.problems);
         assert!(scan.waiting.is_empty(), "{:?}", scan.waiting);
         assert_eq!(scan.complete.len(), 3);

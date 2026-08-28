@@ -27,8 +27,8 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
     let mut pages = Vec::with_capacity(total_pages);
 
     for (index, chunk) in chunks.into_iter().enumerate() {
-        let segment = crate::paper::input::PaperQrSegment {
-            format: crate::paper::input::PAPER_QR_FORMAT.into(),
+        let segment = crate::paper::assembler::PaperQrSegment {
+            format: crate::paper::assembler::PAPER_QR_FORMAT.into(),
             paper: paper.paper_name.to_string(),
             document_hash: document_hash.clone(),
             share: paper.share.x,
@@ -37,7 +37,7 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
             pieces: data_pages,
             data: chunk.to_vec(),
         };
-        let qr_bytes = crate::paper::input::encode_qr_segment(&segment)?;
+        let qr_bytes = crate::paper::assembler::encode_qr_segment(&segment)?;
         let qr = QrCode::with_error_correction_level(&qr_bytes, EcLevel::M)?;
         let mut ops = page_header(
             paper,
