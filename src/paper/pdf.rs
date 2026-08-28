@@ -46,8 +46,7 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
             Some((index + 1, data_pages)),
             &created_on,
         );
-        let prose_bottom =
-            add_instruction_paragraphs(&mut ops, paper, &prose, 24.0, 261.0, 9.2, 4.5);
+        let prose_bottom = add_instruction_paragraphs(&mut ops, &prose, 24.0, 261.0, 9.2, 4.5);
         let divider_y = prose_bottom - 3.0;
         add_content_rule(&mut ops, divider_y);
         let qr_top = divider_y - 5.0;
@@ -67,7 +66,7 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
     }
 
     let mut ops = page_header(paper, total_pages, total_pages, None, &created_on);
-    let prose_bottom = add_instruction_paragraphs(&mut ops, paper, &prose, 24.0, 261.0, 9.2, 4.5);
+    let prose_bottom = add_instruction_paragraphs(&mut ops, &prose, 24.0, 261.0, 9.2, 4.5);
     let mut y = prose_bottom - 3.0;
     add_content_rule(&mut ops, y);
     y -= 10.0;
@@ -133,14 +132,68 @@ pub fn generate_paper_pdf(paper: &PaperShare, qr_bytes: usize) -> Result<Vec<u8>
     Ok(doc.save(&PdfSaveOptions::default(), &mut warnings))
 }
 
-fn instructions(p: &PaperShare) -> Vec<String> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SpanColor {
+    Normal,
+    Identity,
+}
+
+type InstructionSpan = (String, BuiltinFont, SpanColor);
+type InstructionParagraph = Vec<InstructionSpan>;
+
+fn span(text: impl Into<String>, font: BuiltinFont) -> InstructionSpan {
+    (text.into(), font, SpanColor::Normal)
+}
+
+fn identity_span(text: impl Into<String>) -> InstructionSpan {
+    (text.into(), BuiltinFont::HelveticaBold, SpanColor::Identity)
+}
+
+fn instructions(p: &PaperShare) -> Vec<InstructionParagraph> {
     vec![
-        format!("This is a piece of a private key named {} which was created with the pkiboo utility.", p.key_name),
-        format!("There are {} other pieces. Anyone with access to {} pieces can combine them to construct this key",
-                p.share.x, p.share.shamir.threshold),
-        "You should store this piece away from other pieces of the same key. Storing keys together compromises the security of this process".into(),
-        "In the event you lose all complete copies of the key, pkiboo can be used to reconstruct it. Run pkiboo key restore to get instructions on how to restore this key".into(),
-        "To learn more about pkiboo, visit https://github.com/f-omega/pkiboo".into()
+        vec![
+            span(
+                "This is a piece of a private key named ",
+                BuiltinFont::Helvetica,
+            ),
+            identity_span(&p.key_name),
+            span(" which was created with the ", BuiltinFont::Helvetica),
+            span("pkiboo", BuiltinFont::CourierBold),
+            span(" utility.", BuiltinFont::Helvetica),
+        ],
+        vec![span(
+            format!(
+                "There are {} other pieces. Anyone with access to {} pieces can combine them to construct this key",
+                p.share.x, p.share.shamir.threshold
+            ),
+            BuiltinFont::Helvetica,
+        )],
+        vec![span(
+            "You should store this piece away from other pieces of the same key. Storing keys together compromises the security of this process",
+            BuiltinFont::Helvetica,
+        )],
+        vec![
+            span(
+                "In the event you lose all complete copies of the key, ",
+                BuiltinFont::Helvetica,
+            ),
+            span("pkiboo", BuiltinFont::CourierBold),
+            span(
+                " can be used to reconstruct it. Run ",
+                BuiltinFont::Helvetica,
+            ),
+            span("pkiboo key restore", BuiltinFont::CourierBold),
+            span(
+                " to get instructions on how to restore this key",
+                BuiltinFont::Helvetica,
+            ),
+        ],
+        vec![
+            span("To learn more about ", BuiltinFont::Helvetica),
+            span("pkiboo", BuiltinFont::CourierBold),
+            span(", visit ", BuiltinFont::Helvetica),
+            span("https://github.com/f-omega/pkiboo", BuiltinFont::Courier),
+        ],
     ]
 }
 
@@ -214,8 +267,7 @@ fn paper_split_name(paper: &PaperShare) -> String {
 
 fn add_instruction_paragraphs(
     ops: &mut Vec<Op>,
-    paper: &PaperShare,
-    paragraphs: &[String],
+    paragraphs: &[InstructionParagraph],
     x: f32,
     y: f32,
     size: f32,
@@ -223,34 +275,10 @@ fn add_instruction_paragraphs(
 ) -> f32 {
     let mut line_number = 0usize;
     let mut last_y = y;
-    for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
-        for (line_index, line) in wrap(paragraph, 98).iter().enumerate() {
+    for paragraph in paragraphs {
+        for line in wrap_spans(paragraph, 98) {
             let line_y = y - line_number as f32 * leading;
-            if paragraph_index == 5 {
-                add_code_highlights(ops, line, x, line_y, size);
-            } else {
-                let highlight = match paragraph_index {
-                    0 => Some(paper.key_name.as_str()),
-                    1 if line_index == 0 => Some(
-                        // Only the recovery identity is emphasized; the
-                        // surrounding sentence remains ordinary prose.
-                        paragraph
-                            .strip_prefix("This is ")
-                            .and_then(|rest| rest.split('.').next())
-                            .unwrap_or(paragraph),
-                    ),
-                    _ => None,
-                };
-                add_highlighted_text(
-                    ops,
-                    line,
-                    highlight,
-                    x,
-                    line_y,
-                    size,
-                    BuiltinFont::Helvetica,
-                );
-            }
+            add_styled_line(ops, &line, x, line_y, size);
             last_y = line_y;
             line_number += 1;
         }
@@ -259,98 +287,64 @@ fn add_instruction_paragraphs(
     last_y
 }
 
-fn add_code_highlights(ops: &mut Vec<Op>, text: &str, x: f32, y: f32, size: f32) {
-    const CODE: [&str; 2] = ["Pkiboo", "'pkiboo key restore'"];
-    let mut remaining = text;
-    let mut fragments = Vec::new();
-    while !remaining.is_empty() {
-        let next = CODE
-            .iter()
-            .filter_map(|code| remaining.find(code).map(|index| (index, *code)))
-            .min_by_key(|(index, _)| *index);
-        match next {
-            Some((index, code)) => {
-                if index > 0 {
-                    fragments.push((&remaining[..index], BuiltinFont::Helvetica));
-                }
-                fragments.push((code, BuiltinFont::CourierBold));
-                remaining = &remaining[index + code.len()..];
-            }
-            None => {
-                fragments.push((remaining, BuiltinFont::Helvetica));
-                break;
-            }
-        }
-    }
-
+fn add_styled_line(ops: &mut Vec<Op>, spans: &[InstructionSpan], x: f32, y: f32, size: f32) {
     ops.extend([
         Op::StartTextSection,
         Op::SetTextCursor {
             pos: Point::new(Mm(x), Mm(y)),
         },
     ]);
-    for (fragment, font) in fragments {
+    for (text, font, color) in spans {
         ops.extend([
+            Op::SetFillColor {
+                col: match color {
+                    SpanColor::Normal => Color::Greyscale(Greyscale::new(0.0, None)),
+                    SpanColor::Identity => identity_blue(),
+                },
+            },
             Op::SetFont {
-                font: PdfFontHandle::Builtin(font),
+                font: PdfFontHandle::Builtin(*font),
                 size: Pt(size),
             },
             Op::ShowText {
-                items: vec![TextItem::Text(fragment.into())],
+                items: vec![TextItem::Text(text.clone())],
             },
         ]);
     }
-    ops.push(Op::EndTextSection);
-}
-
-fn add_highlighted_text(
-    ops: &mut Vec<Op>,
-    text: &str,
-    highlight: Option<&str>,
-    x: f32,
-    y: f32,
-    size: f32,
-    font: BuiltinFont,
-) {
-    let Some(highlight) = highlight.filter(|needle| text.contains(needle)) else {
-        add_text(ops, text, x, y, size, font);
-        return;
-    };
-    let (before, rest) = text.split_once(highlight).expect("highlight is present");
     ops.extend([
-        Op::StartTextSection,
-        Op::SetTextCursor {
-            pos: Point::new(Mm(x), Mm(y)),
-        },
-        Op::SetFont {
-            font: PdfFontHandle::Builtin(font),
-            size: Pt(size),
-        },
-        Op::ShowText {
-            items: vec![TextItem::Text(before.into())],
-        },
-        Op::SetFillColor {
-            col: identity_blue(),
-        },
-        Op::SetFont {
-            font: PdfFontHandle::Builtin(BuiltinFont::HelveticaBold),
-            size: Pt(size),
-        },
-        Op::ShowText {
-            items: vec![TextItem::Text(highlight.into())],
-        },
+        Op::EndTextSection,
         Op::SetFillColor {
             col: Color::Greyscale(Greyscale::new(0.0, None)),
         },
-        Op::SetFont {
-            font: PdfFontHandle::Builtin(font),
-            size: Pt(size),
-        },
-        Op::ShowText {
-            items: vec![TextItem::Text(rest.into())],
-        },
-        Op::EndTextSection,
     ]);
+}
+
+fn wrap_spans(spans: &[InstructionSpan], columns: usize) -> Vec<Vec<InstructionSpan>> {
+    let mut lines = Vec::new();
+    let mut line = Vec::new();
+    let mut width = 0usize;
+
+    for (text, font, color) in spans {
+        for word in text.split_whitespace() {
+            let word_width = word.chars().count();
+            let separator = usize::from(width > 0);
+            if width > 0 && width + separator + word_width > columns {
+                lines.push(std::mem::take(&mut line));
+                width = 0;
+            }
+            let text = if width == 0 {
+                word.to_owned()
+            } else {
+                format!(" {word}")
+            };
+            width += text.chars().count();
+            line.push((text, *font, *color));
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 fn identity_blue() -> Color {
@@ -531,6 +525,28 @@ mod tests {
             vec![80, 80, 80, 10]
         );
         assert_eq!(lines.concat(), text);
+    }
+
+    #[test]
+    fn instruction_wrapping_preserves_explicit_span_styles() {
+        let paragraph = vec![
+            span("ordinary words", BuiltinFont::Helvetica),
+            identity_span("important-name"),
+            span("command", BuiltinFont::CourierBold),
+        ];
+        let lines = wrap_spans(&paragraph, 20);
+        assert!(lines.len() > 1);
+        let spans = lines.into_iter().flatten().collect::<Vec<_>>();
+        assert!(spans.iter().any(|(text, font, color)| {
+            text.contains("important-name")
+                && *font == BuiltinFont::HelveticaBold
+                && *color == SpanColor::Identity
+        }));
+        assert!(spans.iter().any(|(text, font, color)| {
+            text.contains("command")
+                && *font == BuiltinFont::CourierBold
+                && *color == SpanColor::Normal
+        }));
     }
 
     #[test]
