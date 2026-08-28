@@ -1,10 +1,10 @@
 use std::error::Error;
 
 mod forget;
-mod import;
+pub(crate) mod input;
 mod list;
 mod meta;
-mod scan;
+pub(crate) mod pdf;
 mod show;
 mod verify;
 
@@ -20,11 +20,7 @@ enum Command {
     List(list::Args),
     /// Show a paper artifact
     Show(show::Args),
-    /// Scan a printed pkiboo artifact
-    Scan(scan::Args),
-    /// Import a PDF or scanned file
-    Import(import::Args),
-    /// Verify that a paper artifact is readable and valid
+    /// Verify that one paper share is cryptographically valid
     Verify(verify::Args),
     /// Manage metadata on a paper artifact
     Meta(meta::Args),
@@ -39,8 +35,6 @@ pub async fn main<Ui: crate::Ui>(
     match &args.command {
         Command::List(command) => list::main(boo, args, command).await,
         Command::Show(command) => show::main(boo, args, command).await,
-        Command::Scan(command) => scan::main(boo, args, command).await,
-        Command::Import(command) => import::main(boo, args, command).await,
         Command::Verify(command) => verify::main(boo, args, command).await,
         Command::Meta(command) => meta::main(boo, args, command).await,
         Command::Forget(command) => forget::main(boo, args, command).await,

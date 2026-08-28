@@ -13,6 +13,27 @@ struct CompleteCopy {
     verification: &'static str,
 }
 
+struct FalseRedundancyWarning {
+    media: String,
+    shares: String,
+    warning: &'static str,
+}
+
+impl crate::ui::ListItem for FalseRedundancyWarning {
+    fn column_names() -> &'static [&'static str] {
+        &["media", "shares", "warning"]
+    }
+
+    fn get_field(&self, column: usize) -> String {
+        match column {
+            0 => self.media.clone(),
+            1 => self.shares.clone(),
+            2 => self.warning.into(),
+            _ => String::new(),
+        }
+    }
+}
+
 impl crate::ui::ListItem for CompleteCopy {
     fn column_names() -> &'static [&'static str] {
         &["media", "trusted", "last verified", "verification"]
@@ -121,6 +142,28 @@ pub async fn main<Ui: crate::Ui>(
         },
     );
 
+    let false_redundancy = db
+        .false_redundancy_for_key(key)
+        .into_iter()
+        .map(|colocation| FalseRedundancyWarning {
+            media: colocation.media.to_string(),
+            shares: colocation
+                .shares
+                .iter()
+                .map(|(split, share)| format!("{split} share {}", share.0))
+                .collect::<Vec<_>>()
+                .join(", "),
+            warning: "complete copy and shares are not independent redundancy",
+        })
+        .collect::<Vec<_>>();
+    let redundancy_warnings = boo.ui().pane(
+        "False redundancy warnings".into(),
+        async |pane| -> Result<(), Box<dyn Error>> {
+            pane.list(false_redundancy).display().await;
+            Ok(())
+        },
+    );
+
     let metadata = boo.ui().pane(
         "Metadata".into(),
         async |pane| -> Result<(), Box<dyn Error>> {
@@ -129,6 +172,6 @@ pub async fn main<Ui: crate::Ui>(
         },
     );
 
-    try_join_all([details, copies, metadata]).await?;
+    try_join_all([details, copies, redundancy_warnings, metadata]).await?;
     Ok(())
 }

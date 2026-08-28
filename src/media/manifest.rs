@@ -337,4 +337,42 @@ impl OpenManifest {
         self.current.files.push(signed);
         Ok(())
     }
+
+    /// Copy a file whose manifest signature has already been verified.
+    ///
+    /// Signatures bind the path and content hash, not a particular medium, so
+    /// the original signed entry can safely accompany an identical copy.
+    pub async fn copy_verified_file_from(
+        &mut self,
+        db: &crate::pkiboo::Db,
+        source: &OpenManifest,
+        path: &PathBuf,
+        replace: bool,
+    ) -> Result<(), Box<dyn Error>> {
+        let contents = source
+            .read_verified(db, path)
+            .await?
+            .ok_or_else(|| format!("Source media does not contain {}", path.display()))?;
+        let signed = source
+            .current
+            .lookup_file(path)
+            .expect("read_verified found the manifest entry")
+            .clone();
+
+        if let Some(existing) = self.current.lookup_file(path) {
+            if !replace {
+                if existing.hash == signed.hash {
+                    return Err(format!("{} already contains this share", path.display()).into());
+                }
+                return Err(format!("{} already contains a different share", path.display()).into());
+            }
+        }
+
+        self.media
+            .put(&path.to_string_lossy().to_string(), contents.expose_secret())
+            .await?;
+        self.current.files.retain(|entry| &entry.path != path);
+        self.current.files.push(signed);
+        Ok(())
+    }
 }

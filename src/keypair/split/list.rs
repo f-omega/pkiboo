@@ -50,20 +50,20 @@ pub async fn main<Ui: crate::Ui>(
         None => db.splits.iter().collect::<Vec<_>>(),
     }
     .into_iter()
-        .map(|split| ListedSplit {
-            name: split.label.to_string(),
-            key: split.key.to_string(),
-            threshold: format!("{} of {}", split.min_splits, split.num_splits),
-            placements: split.backups.len(),
-            verification: match split.verification_status_at(now) {
-                PrivateEntityVerification::Complete => "current".into(),
-                PrivateEntityVerification::Degraded { verified, expected } => {
-                    format!("degraded ({verified}/{expected})")
-                }
-                PrivateEntityVerification::NotVerified => "needed".into(),
-            },
-        })
-        .collect::<Vec<_>>();
+    .map(|split| ListedSplit {
+        name: split.label.to_string(),
+        key: split.key.to_string(),
+        threshold: format!("{} of {}", split.min_splits, split.num_splits),
+        placements: split.backups.len(),
+        verification: match split.verification_status_at(now) {
+            PrivateEntityVerification::Complete => "current".into(),
+            PrivateEntityVerification::Degraded { verified, expected } => {
+                format!("degraded ({verified}/{expected})")
+            }
+            PrivateEntityVerification::NotVerified => "needed".into(),
+        },
+    })
+    .collect::<Vec<_>>();
 
     boo.ui()
         .list(splits)

@@ -21,6 +21,13 @@ pub async fn main<Ui: crate::Ui>(
         .lookup_split(&args.split)
         .ok_or_else(|| format!("Split {} not found", args.split))?;
     let now = chrono::Utc::now();
+    let distinct_shares = db.distinct_shares_for_split(split).len();
+    let missing_shares = db
+        .missing_shares_for_split(split)
+        .iter()
+        .map(|share| share.0.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
     let verification = match split.verification_status_at(now) {
         PrivateEntityVerification::Complete => "current".into(),
         PrivateEntityVerification::Degraded { verified, expected } => {
@@ -37,10 +44,22 @@ pub async fn main<Ui: crate::Ui>(
                 Property::new("Key", split.key.to_string()),
                 Property::new("Threshold", split.min_splits.to_string()),
                 Property::new("Total shares", split.num_splits.to_string()),
-                Property::new("Distinct shares", split.distinct_backup_count().to_string()),
+                Property::new("Distinct shares", distinct_shares.to_string()),
+                Property::new(
+                    "Missing shares",
+                    if missing_shares.is_empty() {
+                        "none".into()
+                    } else {
+                        missing_shares
+                    },
+                ),
                 Property::new(
                     "Recovery quorum available",
-                    if split.has_recovery_quorum() { "yes" } else { "no" },
+                    if distinct_shares >= split.min_splits as usize {
+                        "yes"
+                    } else {
+                        "no"
+                    },
                 ),
                 Property::new("Verification", verification),
             ]))

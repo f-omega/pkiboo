@@ -17,8 +17,8 @@ pub use ui::Ui;
 
 #[derive(clap::Parser)]
 #[command(
-    name = "fomega",
-    about = "F Omega node management and provisioning utility",
+    name = "pkiboo",
+    about = "Private-key and PKI backup utility",
     version
 )]
 pub struct CliOptions {

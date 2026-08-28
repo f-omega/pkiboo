@@ -11,7 +11,7 @@ mod create;
 mod list;
 mod meta;
 mod show;
-mod split;
+pub(crate) mod split;
 mod verify;
 
 pub use cli::{Args, main};

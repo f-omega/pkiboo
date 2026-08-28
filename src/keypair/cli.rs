@@ -18,12 +18,15 @@ enum Command {
     Show(super::show::Args),
     /// Create a new complete copy of a key
     Backup(super::backups::Args),
-    /// Manage threshold recovery splits
+    /// Manage threshold recovery shares
+    #[command(name = "share", alias = "split")]
     Split(super::split::Args),
     /// Verify a key copy or recovery path
     Verify(super::verify::Args),
     /// Manage metadata on a key
     Meta(super::meta::Args),
+    /// Restore a complete key from recovery shares
+    Restore(super::split::reconstruct::Args),
 }
 
 pub async fn main<Ui: crate::Ui>(
@@ -38,5 +41,6 @@ pub async fn main<Ui: crate::Ui>(
         Command::Split(command) => super::split::main(boo, args, command).await,
         Command::Verify(command) => super::verify::main(boo, args, command).await,
         Command::Meta(command) => super::meta::main(boo, args, command).await,
+        Command::Restore(command) => super::split::reconstruct::main(boo, command).await,
     }
 }

@@ -15,6 +15,11 @@ pub struct Args {
     /// Destination media for the new complete copy
     #[arg(long)]
     media: Name<Media>,
+
+    /// Allow false redundancy with a recovery share on the same medium
+    #[arg(long)]
+    force: bool,
+
 }
 
 async fn release_media<T: Task>(
@@ -78,6 +83,29 @@ pub(crate) async fn main<Ui: crate::Ui>(
             destination.label
         )
         .into());
+    }
+
+    let shares_on_destination = db
+        .splits_for_key(&key.name)
+        .flat_map(|split| {
+            split
+                .backups
+                .iter()
+                .filter(|backup| backup.media == destination.label)
+                .map(move |backup| format!("{} share {}", split.label, backup.share.0))
+        })
+        .collect::<Vec<_>>();
+    if !shares_on_destination.is_empty() {
+        let warning = format!(
+            "Media {} already contains recovery shares of key {} ({}); a complete copy there is false redundancy",
+            destination.label,
+            key.name,
+            shares_on_destination.join(", ")
+        );
+        if !args.force {
+            return Err(format!("{warning}; pass --force to continue").into());
+        }
+        crate::cli_common::warn(warning);
     }
 
     let source = boo

@@ -111,17 +111,64 @@ pub struct Db {
 
     /// Backend media
     pub media: Vec<Media>,
+
+    /// Paper artifacts which have been issued or imported.
+    #[serde(default)]
+    pub papers: Vec<Paper>,
 }
 
 static DB_KEY: &'static str = "db.yaml";
 
 impl Db {
-    fn empty() -> Self {
+    pub fn distinct_shares_for_split(
+        &self,
+        split: &Split,
+    ) -> std::collections::HashSet<ShareNumber> {
+        split
+            .backups
+            .iter()
+            .map(|backup| backup.share)
+            .chain(
+                self.papers
+                    .iter()
+                    .filter(|paper| paper.split == split.label)
+                    .map(|paper| paper.share),
+            )
+            .collect()
+    }
+
+    pub fn missing_shares_for_split(&self, split: &Split) -> Vec<ShareNumber> {
+        let present = self.distinct_shares_for_split(split);
+        (1..=split.num_splits)
+            .map(ShareNumber)
+            .filter(|share| !present.contains(share))
+            .collect()
+    }
+
+    pub fn share_copy_count(&self, split: &Name<Split>, share: ShareNumber) -> usize {
+        self.lookup_split(split)
+            .map(|split| {
+                split
+                    .backups
+                    .iter()
+                    .filter(|backup| backup.share == share)
+                    .count()
+            })
+            .unwrap_or_default()
+            + self
+                .papers
+                .iter()
+                .filter(|paper| &paper.split == split && paper.share == share)
+                .count()
+    }
+
+    pub(crate) fn empty() -> Self {
         Db {
             keys: Vec::new(),
             certs: Vec::new(),
             splits: Vec::new(),
             media: Vec::new(),
+            papers: Vec::new(),
         }
     }
 
@@ -131,6 +178,10 @@ impl Db {
 
     pub fn lookup_media_by_id(&self, id: &crate::media::MediaId) -> Option<&Media> {
         self.media.iter().find(|n| &n.id == id)
+    }
+
+    pub fn lookup_paper(&self, nm: &Name<Paper>) -> Option<&Paper> {
+        self.papers.iter().find(|paper| &paper.name == nm)
     }
 
     pub fn lookup_key(&self, nm: &Name<Key>) -> Option<&Key> {
@@ -157,9 +208,7 @@ impl Db {
 
     /// Iterate over the splits belonging to one managed key.
     pub fn splits_for_key(&self, key: &Name<Key>) -> impl Iterator<Item = &Split> {
-        self.splits
-            .iter()
-            .filter(move |split| &split.key == key)
+        self.splits.iter().filter(move |split| &split.key == key)
     }
 
     /// Write a non-authoritative snapshot that may help reconstruct local
@@ -175,9 +224,71 @@ impl Db {
     }
 }
 
+/// A registered physical paper artifact.
+///
+/// The contents and artifact-specific metadata will be added with paper share
+/// generation. Persisting the name now gives all paper-producing workflows a
+/// single namespace in which accidental replacement can be rejected.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Paper {
+    pub name: Name<Self>,
+
+    /// Managed key and split represented by this paper artifact.
+    pub key: Name<Key>,
+    pub split: Name<Split>,
+    pub share: ShareNumber,
+
+    #[serde(default = "Meta::new")]
+    pub meta: Meta,
+}
+
 #[cfg(test)]
 mod verification_tests {
     use super::*;
+
+    #[test]
+    fn share_path_is_scoped_by_key_and_number() {
+        let split = Split {
+            label: Name::new("catastrophe-2026".into()),
+            key: Name::new("root".into()),
+            num_splits: 5,
+            min_splits: 3,
+            meta: Meta::new(),
+            backups: Vec::new(),
+            verifications: Vec::new(),
+        };
+
+        assert_eq!(
+            split.share(ShareNumber(4)).path(),
+            PathBuf::from("keys/root/share-4.yaml")
+        );
+    }
+
+    #[test]
+    fn complete_copy_and_share_on_one_medium_are_false_redundancy() {
+        let mut db = Db::empty();
+        let mut key = Key::new(
+            Name::new("root".into()),
+            crate::keypair::Algorithm::ED25519(crate::keypair::Ed25519Spec {}),
+            "public key PEM".into(),
+        );
+        key.add_backup(Name::new("vault".into()));
+        db.keys.push(key);
+        db.splits.push(Split {
+            label: Name::new("recovery".into()),
+            key: Name::new("root".into()),
+            num_splits: 3,
+            min_splits: 2,
+            meta: Meta::new(),
+            backups: vec![placement(2, "vault")],
+            verifications: Vec::new(),
+        });
+
+        let warnings = db.false_redundancy_for_key(&db.keys[0]);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].media.to_string(), "vault");
+        assert_eq!(warnings[0].shares[0].1, ShareNumber(2));
+    }
 
     fn placement(share: u32, media: &str) -> SplitBackup {
         SplitBackup {
@@ -337,6 +448,33 @@ impl<'a> DbTx<'a> {
 
     pub fn add_media(&mut self, m: Media) {
         self.media.push(m)
+    }
+
+    pub fn add_split(&mut self, split: Split) {
+        self.splits.push(split)
+    }
+
+    pub fn add_paper(&mut self, paper: Paper) {
+        self.papers.push(paper)
+    }
+
+    pub fn update_paper(&mut self, mut paper: Paper) -> Result<Paper, Box<dyn Error>> {
+        match self
+            .papers
+            .iter()
+            .enumerate()
+            .find(|(_, candidate)| candidate.name == paper.name)
+        {
+            None => Err(format!("Paper {} does not exist", paper.name).into()),
+            Some((index, _)) => {
+                std::mem::swap(&mut self.papers[index], &mut paper);
+                Ok(paper)
+            }
+        }
+    }
+
+    pub fn forget_paper(&mut self, paper: &Name<Paper>) {
+        self.papers.retain(|candidate| &candidate.name != paper);
     }
 
     /// Remove a medium from inventory and from every private entity's backup
@@ -648,6 +786,16 @@ pub struct Split {
     pub verifications: Vec<SplitVerification>,
 }
 
+impl Split {
+    /// Resolve one numbered on-media secret artifact.
+    pub fn share(&self, number: ShareNumber) -> Share {
+        Share {
+            key: self.key.clone(),
+            number,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrivateEntityVerification {
     Complete,
@@ -659,6 +807,23 @@ pub enum PrivateEntityVerification {
 pub struct KeyCopyVerification {
     pub media: Name<Media>,
     pub verified_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The secret-share artifact stored for a key on one backup medium.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Share {
+    pub key: Name<Key>,
+    pub number: ShareNumber,
+}
+
+impl Share {
+    /// Canonical relative path of this share on backup media.
+    pub fn path(&self) -> PathBuf {
+        PathBuf::new()
+            .join("keys")
+            .join(self.key.to_string())
+            .join(format!("share-{}.yaml", self.number.0))
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -775,6 +940,12 @@ pub struct DatabaseHealth {
     pub issues: Vec<HealthIssue>,
 }
 
+/// A medium which holds both a complete key and recovery shares of that key.
+pub struct FalseRedundancy {
+    pub media: Name<Media>,
+    pub shares: Vec<(Name<Split>, ShareNumber)>,
+}
+
 impl Key {
     pub fn has_required_replicas(&self) -> bool {
         self.backups.len() >= MIN_KEY_REPLICAS
@@ -827,6 +998,29 @@ impl Split {
 }
 
 impl Db {
+    /// Find forced full-key/share colocation recorded for one key.
+    pub fn false_redundancy_for_key(&self, key: &Key) -> Vec<FalseRedundancy> {
+        key.backups
+            .iter()
+            .filter_map(|media| {
+                let shares = self
+                    .splits_for_key(&key.name)
+                    .flat_map(|split| {
+                        split
+                            .backups
+                            .iter()
+                            .filter(|backup| &backup.media == media)
+                            .map(move |backup| (split.label.clone(), backup.share))
+                    })
+                    .collect::<Vec<_>>();
+                (!shares.is_empty()).then(|| FalseRedundancy {
+                    media: media.clone(),
+                    shares,
+                })
+            })
+            .collect()
+    }
+
     /// Assess recoverability, verification freshness, certificate validity,
     /// and referential integrity using only durable database state.
     pub fn health_at(
@@ -881,6 +1075,21 @@ impl Db {
                     ));
                 }
             }
+
+            for colocation in self.false_redundancy_for_key(key) {
+                health.issues.push(HealthIssue::warning(
+                    entity.clone(),
+                    format!(
+                        "media {} holds both a complete copy and recovery shares ({}) and therefore provides false redundancy",
+                        colocation.media,
+                        colocation
+                            .shares
+                            .iter()
+                            .map(|(split, share)| format!("{split} share {}", share.0))
+                            .join(", ")
+                    ),
+                ));
+            }
         }
 
         for split in &self.splits {
@@ -890,9 +1099,9 @@ impl Db {
                     .backups
                     .iter()
                     .all(|backup| self.lookup_media(&backup.media).is_some());
-            let available_shares = split.distinct_backup_count();
+            let available_shares = self.distinct_shares_for_split(split).len();
 
-            if !split.has_recovery_quorum() {
+            if available_shares < split.min_splits as usize {
                 health.issues.push(HealthIssue::critical(
                     entity.clone(),
                     format!(
@@ -900,7 +1109,7 @@ impl Db {
                         split.min_splits
                     ),
                 ));
-            } else if !split.has_all_configured_shares() {
+            } else if available_shares < split.num_splits as usize {
                 health.issues.push(HealthIssue::warning(
                     entity.clone(),
                     format!(
@@ -912,7 +1121,7 @@ impl Db {
 
             let verification = split.verification_status_at(now);
             add_verification_issue(&mut health.issues, &entity, verification);
-            if split.has_all_configured_shares()
+            if available_shares >= split.num_splits as usize
                 && references_valid
                 && verification == PrivateEntityVerification::Complete
             {
@@ -1247,7 +1456,10 @@ impl PrivateEntity for Key {
     }
 
     fn backup_count_excluding(&self, media: &Name<Media>) -> usize {
-        self.backups.iter().filter(|backup| *backup != media).count()
+        self.backups
+            .iter()
+            .filter(|backup| *backup != media)
+            .count()
     }
 
     fn is_backed_up_on(&self, media: &Name<Media>) -> bool {

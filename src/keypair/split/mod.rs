@@ -1,9 +1,11 @@
 use std::error::Error;
 
+mod backup;
 mod create;
 mod list;
 mod meta;
-mod reconstruct;
+pub(crate) mod reconstruct;
+pub(crate) mod share;
 mod show;
 mod verify;
 
@@ -15,6 +17,8 @@ pub struct Args {
 
 #[derive(clap::Subcommand)]
 enum Command {
+    /// Copy a numbered recovery share to alternate media
+    Backup(backup::Args),
     /// Create a threshold recovery split
     Create(create::Args),
     /// List recovery splits
@@ -25,8 +29,6 @@ enum Command {
     Verify(verify::Args),
     /// Manage metadata on a recovery split
     Meta(meta::Args),
-    /// Reconstruct a key from shares, including shares not recorded locally
-    Reconstruct(reconstruct::Args),
 }
 
 pub async fn main<Ui: crate::Ui>(
@@ -35,11 +37,11 @@ pub async fn main<Ui: crate::Ui>(
     args: &Args,
 ) -> Result<(), Box<dyn Error>> {
     match &args.command {
+        Command::Backup(command) => backup::main(boo, args, command).await,
         Command::Create(command) => create::main(boo, args, command).await,
         Command::List(command) => list::main(boo, args, command).await,
         Command::Show(command) => show::main(boo, args, command).await,
         Command::Verify(command) => verify::main(boo, args, command).await,
         Command::Meta(command) => meta::main(boo, args, command).await,
-        Command::Reconstruct(command) => reconstruct::main(boo, args, command).await,
     }
 }

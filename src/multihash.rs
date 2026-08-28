@@ -3,7 +3,7 @@ use std::fmt::Display;
 
 use openssl::hash::{hash, MessageDigest};
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HashAlgorithm {
     SHA256,
     SHA512
@@ -52,7 +52,7 @@ impl HashAlgorithm {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MultiHash {
     pub kind: HashAlgorithm,
     hex_encoded: String
