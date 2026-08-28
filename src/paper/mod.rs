@@ -10,6 +10,8 @@ mod show;
 mod verify;
 #[cfg(feature = "wormhole")]
 mod wormhole;
+#[cfg(feature = "wormhole")]
+pub(crate) mod webrtc;
 
 #[derive(clap::Args)]
 pub struct Args {

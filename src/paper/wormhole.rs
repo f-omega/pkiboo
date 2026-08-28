@@ -1,7 +1,6 @@
 //! Opt-in Magic Wormhole image receiver for paper-share ingestion.
 use crate::ui::{Task, TaskStarterExt};
-use futures::future::pending;
-use magic_wormhole::{MailboxConnection, Wormhole, transfer, transit};
+use magic_wormhole::{MailboxConnection, Wormhole, transfer};
 use std::error::Error;
 
 const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
@@ -24,36 +23,16 @@ pub async fn receive_image<T: Task>(parent: T) -> Result<ReceivedImages, Box<dyn
                 mailbox.code()
             ))
             .await;
-            let wormhole = Wormhole::connect(mailbox).await?;
-            let relay = transit::RelayHint::from_urls(
-                None,
-                [transit::DEFAULT_RELAY_SERVER.parse()?],
-            )?;
-            let Some(request) = transfer::request_file(
-                wormhole,
-                vec![relay],
-                transit::Abilities::ALL,
-                pending(),
-            )
-            .await?
-            else {
-                return Err("Magic Wormhole image transfer was cancelled".into());
-            };
-            let filename = crate::cli_common::untrusted_terminal_label(&request.file_name(), 255);
-            let size = request.file_size();
-            if size > MAX_IMAGE_BYTES {
-                request.reject().await?;
-                return Err(format!(
-                    "Magic Wormhole image {filename:?} is {size} bytes; maximum is {MAX_IMAGE_BYTES}"
-                )
-                .into());
+            let mut wormhole = Wormhole::connect(mailbox).await?;
+            let images = super::webrtc::receive_images(&mut wormhole).await?;
+            let mut output = Vec::new();
+            for (filename, bytes) in images {
+                if bytes.len() as u64 > MAX_IMAGE_BYTES {
+                    return Err(format!("Magic Wormhole image {filename:?} exceeds {MAX_IMAGE_BYTES} bytes").into());
+                }
+                output.push(ReceivedImage { filename: crate::cli_common::untrusted_terminal_label(&filename, 255), bytes });
             }
-            task.set_message(format!("Receiving image {filename} ({size} bytes)")).await;
-            let mut bytes = Vec::with_capacity(size as usize);
-            let mut output = futures::io::Cursor::new(&mut bytes);
-            request.accept(|_| {}, |_, _| {}, &mut output, pending()).await?;
-            drop(output);
-            decode_image_bundle(filename, bytes)
+            Ok(ReceivedImages(output))
         })
         .await
 }
