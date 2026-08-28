@@ -32,7 +32,7 @@
               inherit src;
               strictDeps = true;
               nativeBuildInputs = [ pkgs.pkg-config ];
-              buildInputs = [ pkgs.openssl ];
+              buildInputs = [ pkgs.openssl pkgs.zbar ];
             };
 
             cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -66,7 +66,7 @@
             pkgs.openssl.dev
             pkgs.udev.dev
             pkgs.zbar.dev
-          ];
+	  ];
           RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";
         };
       });

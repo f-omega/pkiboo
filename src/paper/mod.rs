@@ -1,5 +1,6 @@
 use std::error::Error;
 
+pub(crate) mod assembler;
 mod forget;
 pub(crate) mod input;
 mod list;
@@ -7,6 +8,8 @@ mod meta;
 pub(crate) mod pdf;
 mod show;
 mod verify;
+#[cfg(feature = "wormhole")]
+mod wormhole;
 
 #[derive(clap::Args)]
 pub struct Args {

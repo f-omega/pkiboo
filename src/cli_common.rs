@@ -68,6 +68,17 @@ pub(crate) fn success_mark() -> String {
     styled_status_mark("✓", AnsiColor::Green)
 }
 
+/// Make untrusted external text safe and bounded for a one-line terminal label.
+/// This deliberately changes display text only; callers retain original data.
+#[cfg(any(feature = "wormhole", test))]
+pub(crate) fn untrusted_terminal_label(value: &str, max_chars: usize) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(max_chars)
+        .collect()
+}
+
 fn styled_status_mark(mark: &str, color: AnsiColor) -> String {
     if std::io::stderr().is_terminal() {
         let style = Style::new().bold().fg_color(Some(color.into()));
@@ -663,6 +674,12 @@ impl PaneStarter for CliBackend {
 #[cfg(test)]
 mod pane_tests {
     use super::*;
+
+    #[test]
+    fn untrusted_labels_drop_controls_and_are_character_bounded() {
+        assert_eq!(untrusted_terminal_label("ab\u{1b}[31mcd", 5), "ab[31");
+        assert_eq!(untrusted_terminal_label("éclair", 2), "éc");
+    }
 
     #[test]
     fn completed_panes_flush_in_creation_order() {

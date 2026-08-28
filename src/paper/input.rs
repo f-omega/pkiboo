@@ -1,65 +1,79 @@
 //! Asynchronous ingestion of numbered paper-share QR chunks from image files.
+use super::assembler::{AssemblyEvent, CompletedShare, ShareAssembler};
+pub use super::assembler::{PAPER_QR_FORMAT, decode_qr_segment, document_hash};
+#[cfg(test)]
+use super::assembler::{PaperQrSegment, encode_qr_segment};
 use crate::{keypair::split::share::PaperShare, ui::Task};
-use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashSet, VecDeque},
     error::Error,
     path::{Path, PathBuf},
     time::Duration,
 };
 
-pub const PAPER_QR_FORMAT: &str = "pkiboo-paper-share";
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PaperQrSegment {
-    pub format: String,
-    pub paper: String,
-    pub document_hash: String,
-    pub share: u8,
-    pub shares: u8,
-    pub piece: usize,
-    pub pieces: usize,
-    /// Raw bytes from this piece of the serialized YAML `PaperShare`.
-    #[serde(with = "serde_bytes")]
-    pub data: Vec<u8>,
-}
-
-pub fn encode_qr_segment(segment: &PaperQrSegment) -> Result<Vec<u8>, Box<dyn Error>> {
-    Ok(bson::serialize_to_vec(segment)?)
-}
-
-fn decode_qr_segment(bytes: &[u8]) -> Result<PaperQrSegment, Box<dyn Error>> {
-    Ok(bson::deserialize_from_slice(bytes)?)
-}
-
 #[derive(Default)]
 pub struct PaperInput {
-    directory: PathBuf,
-    emitted: HashSet<String>,
+    directory: Option<PathBuf>,
+    assembler: ShareAssembler,
+    pending: VecDeque<CompletedShare>,
     reported: HashSet<String>,
+    #[cfg(feature = "wormhole")]
+    magic_wormhole: bool,
 }
 
 impl PaperInput {
-    pub fn new(directory: impl Into<PathBuf>) -> Self {
+    pub fn new(directory: Option<PathBuf>) -> Self {
         Self {
-            directory: directory.into(),
+            directory,
             ..Self::default()
         }
+    }
+
+    #[cfg(feature = "wormhole")]
+    pub fn enable_magic_wormhole(&mut self, enabled: bool) {
+        self.magic_wormhole = enabled;
     }
 
     /// Wait for the next complete, commitment-valid paper share. Repeated calls
     /// yield additional complete documents, making this usable beside media or
     /// future remote-share waiters in a ceremony.
     pub async fn next_share<T: Task>(&mut self, task: &T) -> Result<PaperShare, Box<dyn Error>> {
-        if !self.directory.is_dir() {
-            return Err(format!(
-                "Paper input {} is not a directory",
-                self.directory.display()
-            )
-            .into());
+        if let Some(directory) = &self.directory
+            && !directory.is_dir()
+        {
+            return Err(format!("Paper input {} is not a directory", directory.display()).into());
         }
+        #[cfg(feature = "wormhole")]
+        let mut wormhole_receive = self
+            .magic_wormhole
+            .then(|| Box::pin(super::wormhole::receive_image(task.clone())));
+
         loop {
-            let scan = scan_directory(&self.directory)?;
+            if let Some(complete) = self.pending.pop_front() {
+                complete.paper.share.verify()?;
+                task.set_message(format!(
+                    "Read complete paper share {} from {} QR chunk{}",
+                    complete.paper.paper_name,
+                    complete.pieces,
+                    if complete.pieces == 1 { "" } else { "s" }
+                ))
+                .await;
+                return Ok(complete.paper);
+            }
+            let scan = if let Some(directory) = &self.directory {
+                scan_directory(directory, &mut self.assembler)?
+            } else {
+                let progress = self.assembler.progress();
+                Scan {
+                    complete: Vec::new(),
+                    waiting: self.assembler.waiting(),
+                    problems: Vec::new(),
+                    discovered_shares: progress.discovered_shares,
+                    complete_shares: progress.complete_shares,
+                    loaded_pieces: progress.loaded_pieces,
+                    total_pieces: progress.total_pieces,
+                }
+            };
             task.set_progress(scan.loaded_pieces, scan.total_pieces)
                 .await;
             let progress = if scan.discovered_shares == 0 {
@@ -78,24 +92,25 @@ impl PaperInput {
                     crate::cli_common::warn(problem);
                 }
             }
-            for complete in scan.complete {
-                if self.emitted.insert(complete.hash.clone()) {
-                    complete.paper.share.verify()?;
-                    task.set_message(format!(
-                        "Read complete paper share {} from {} QR chunk{} ({progress})",
-                        complete.paper.paper_name,
-                        complete.pieces,
-                        if complete.pieces == 1 { "" } else { "s" }
-                    ))
-                    .await;
-                    return Ok(complete.paper);
-                }
+            self.pending.extend(scan.complete);
+            if let Some(complete) = self.pending.pop_front() {
+                complete.paper.share.verify()?;
+                task.set_message(format!(
+                    "Read complete paper share {} from {} QR chunk{} ({progress})",
+                    complete.paper.paper_name,
+                    complete.pieces,
+                    if complete.pieces == 1 { "" } else { "s" }
+                ))
+                .await;
+                return Ok(complete.paper);
             }
             task.set_message(if scan.waiting.is_empty() {
                 if progress.is_empty() {
-                    format!(
-                        "Waiting for pkiboo QR chunks in {}",
-                        self.directory.display()
+                    self.directory.as_ref().map_or_else(
+                        || "Waiting for a paper-share image".into(),
+                        |directory| {
+                            format!("Waiting for pkiboo QR chunks in {}", directory.display())
+                        },
                     )
                 } else {
                     progress
@@ -104,18 +119,49 @@ impl PaperInput {
                 format!("{progress}; waiting for {}", scan.waiting.join("; "))
             })
             .await;
+            #[cfg(feature = "wormhole")]
+            if let Some(receive) = wormhole_receive.as_mut() {
+                tokio::select! {
+                    received = receive => {
+                        match received {
+                            Ok(received) => {
+                                for image in received.0 {
+                                    let result = ingest_image_bytes(
+                                        &image.bytes,
+                                        &format!("Magic Wormhole image {}", image.filename),
+                                        &mut self.assembler,
+                                    );
+                                    self.pending.extend(result.complete);
+                                    for problem in result.problems {
+                                        if self.reported.insert(problem.clone()) {
+                                            crate::cli_common::warn(problem);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                let warning = format!(
+                                    "Magic Wormhole receiver stopped: {error}. Paper input is still waiting; creating a new link"
+                                );
+                                if self.reported.insert(warning.clone()) {
+                                    crate::cli_common::warn(warning);
+                                }
+                            }
+                        }
+                        wormhole_receive = Some(Box::pin(super::wormhole::receive_image(task.clone())));
+                        continue;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                }
+                continue;
+            }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 }
 
-struct Complete {
-    hash: String,
-    paper: PaperShare,
-    pieces: usize,
-}
 struct Scan {
-    complete: Vec<Complete>,
+    complete: Vec<CompletedShare>,
     waiting: Vec<String>,
     problems: Vec<String>,
     discovered_shares: usize,
@@ -123,16 +169,102 @@ struct Scan {
     loaded_pieces: usize,
     total_pieces: usize,
 }
+
 #[derive(Default)]
-struct Assembly {
-    pieces: usize,
-    chunks: BTreeMap<usize, Vec<u8>>,
-    invalid: bool,
+struct ImageIngest {
+    complete: Vec<CompletedShare>,
+    problems: Vec<String>,
 }
 
-fn scan_directory(directory: &Path) -> Result<Scan, Box<dyn Error>> {
-    let mut groups = HashMap::<(String, String, u8, u8), Assembly>::new();
+fn ingest_image_bytes(bytes: &[u8], source: &str, assembler: &mut ShareAssembler) -> ImageIngest {
+    let image = match image::load_from_memory(bytes) {
+        Ok(image) => image.to_luma8(),
+        Err(error) => {
+            return ImageIngest {
+                problems: vec![format!("Could not read {source}: {error}")],
+                ..ImageIngest::default()
+            };
+        }
+    };
+    let (width, height) = image.dimensions();
+    let mut scanner = zbar_rust::ZBarImageScanner::new();
+    // Only run the QR decoder. Besides avoiding wasted work, this prevents
+    // unrelated linear-barcode decoders from emitting warnings for dense QR
+    // images.
+    for (symbol, enabled) in [
+        (zbar_rust::ZBarSymbolType::ZBarNone, 0),
+        (zbar_rust::ZBarSymbolType::ZBarQRCode, 1),
+    ] {
+        if let Err(error) = scanner.set_config(
+            symbol,
+            zbar_rust::ZBarConfig::ZBarCfgEnable,
+            enabled,
+        ) {
+            return ImageIngest {
+                problems: vec![format!("Could not configure QR scanning: {error}")],
+                ..ImageIngest::default()
+            };
+        }
+    }
+    // zbar-rust predates ZBAR_CFG_BINARY and calls its ordinal (4)
+    // `ZBarCfgNum`. Current ZBar uses that value to disable text recoding,
+    // which is essential because pkiboo QR payloads are arbitrary BSON bytes.
+    if let Err(error) = scanner.set_config(
+        zbar_rust::ZBarSymbolType::ZBarQRCode,
+        zbar_rust::ZBarConfig::ZBarCfgNum,
+        1,
+    ) {
+        return ImageIngest {
+            problems: vec![format!("Could not configure binary QR scanning: {error}")],
+            ..ImageIngest::default()
+        };
+    }
+    let symbols = match scanner.scan_y800(image.into_raw(), width, height) {
+        Ok(symbols) => symbols,
+        Err(error) => {
+            return ImageIngest {
+                problems: vec![format!("Could not scan QR codes in {source}: {error}")],
+                ..ImageIngest::default()
+            };
+        }
+    };
+    if symbols.is_empty() {
+        return ImageIngest {
+            problems: vec![format!("Could not find a QR code in {source}")],
+            ..ImageIngest::default()
+        };
+    }
+
+    let mut result = ImageIngest::default();
+    let mut matched = false;
+    for symbol in symbols {
+        let segment = match decode_qr_segment(&symbol.data) {
+            Ok(segment) if segment.format == PAPER_QR_FORMAT => segment,
+            _ => continue,
+        };
+        matched = true;
+        match assembler.ingest(segment) {
+            AssemblyEvent::ShareCompleted(share) => result.complete.push(share),
+            AssemblyEvent::Problem(problem) => {
+                result.problems.push(format!("{source}: {problem}"))
+            }
+            AssemblyEvent::PieceAccepted | AssemblyEvent::DuplicateIgnored => {}
+        }
+    }
+    if !matched {
+        result
+            .problems
+            .push(format!("No pkiboo paper-share QR code found in {source}"));
+    }
+    result
+}
+
+fn scan_directory(
+    directory: &Path,
+    assembler: &mut ShareAssembler,
+) -> Result<Scan, Box<dyn Error>> {
     let mut problems = Vec::new();
+    let mut complete = Vec::new();
     let mut paths = std::fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
     paths.sort_by_key(|e| e.path());
     for entry in paths {
@@ -140,134 +272,26 @@ fn scan_directory(directory: &Path) -> Result<Scan, Box<dyn Error>> {
         if !path.is_file() || !is_image(&path) {
             continue;
         }
-        let image = match image::open(&path) {
-            Ok(i) => i.to_luma8(),
-            Err(e) => {
-                problems.push(format!("Could not read image {}: {e}", path.display()));
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                problems.push(format!("Could not read image {}: {error}", path.display()));
                 continue;
             }
         };
-        let mut prepared = rqrr::PreparedImage::prepare(image);
-        let grids = prepared.detect_grids();
-        if grids.is_empty() {
-            problems.push(format!("Could not find a QR code in {}", path.display()));
-            continue;
-        }
-        let mut matched = false;
-        let mut decode_errors = Vec::new();
-        for grid in grids {
-            let mut content = Vec::new();
-            match grid.decode_to(&mut content) {
-                Ok(_) => {
-                    let segment = match decode_qr_segment(&content) {
-                        Ok(s) if s.format == PAPER_QR_FORMAT => s,
-                        _ => continue,
-                    };
-                    matched = true;
-                    if segment.piece == 0 || segment.pieces == 0 || segment.piece > segment.pieces {
-                        problems.push(format!(
-                            "Invalid pkiboo QR chunk numbering in {}",
-                            path.display()
-                        ));
-                        continue;
-                    }
-                    let data = segment.data;
-                    let group = groups
-                        .entry((
-                            segment.paper,
-                            segment.document_hash,
-                            segment.share,
-                            segment.shares,
-                        ))
-                        .or_default();
-                    if group.pieces != 0 && group.pieces != segment.pieces {
-                        group.invalid = true;
-                    }
-                    group.pieces = segment.pieces;
-                    if group
-                        .chunks
-                        .get(&segment.piece)
-                        .is_some_and(|old| old != &data)
-                    {
-                        group.invalid = true;
-                    } else {
-                        group.chunks.insert(segment.piece, data);
-                    }
-                }
-                Err(e) => decode_errors.push(e.to_string()),
-            }
-        }
-        if !matched {
-            problems.push(if decode_errors.is_empty() {
-                format!("No pkiboo paper-share QR code found in {}", path.display())
-            } else {
-                format!(
-                    "Could not read QR code in {}: {}",
-                    path.display(),
-                    decode_errors.join("; ")
-                )
-            });
-        }
+        let result = ingest_image_bytes(&bytes, &format!("image {}", path.display()), assembler);
+        complete.extend(result.complete);
+        problems.extend(result.problems);
     }
-    let mut complete = Vec::new();
-    let mut waiting = Vec::new();
-    let discovered_shares = groups.len();
-    let mut loaded_pieces = 0usize;
-    let mut total_pieces = 0usize;
-    for ((paper_name, hash, share, _), group) in groups {
-        loaded_pieces += group.chunks.len().min(group.pieces);
-        total_pieces += group.pieces;
-        if group.invalid {
-            problems.push(format!(
-                "Conflicting QR chunks found for paper {paper_name}"
-            ));
-            continue;
-        }
-        let missing = (1..=group.pieces)
-            .filter(|n| !group.chunks.contains_key(n))
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            waiting.push(format!(
-                "paper {paper_name} chunks {}",
-                missing
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-            continue;
-        }
-        let bytes = (1..=group.pieces)
-            .flat_map(|n| group.chunks[&n].clone())
-            .collect::<Vec<_>>();
-        if document_hash(&bytes)? != hash {
-            problems.push(format!(
-                "QR chunks for paper {paper_name} failed their document hash"
-            ));
-            continue;
-        }
-        match yaml_serde::from_slice::<PaperShare>(&bytes) {
-            Ok(p) if p.paper_name.to_string() == paper_name && p.share.x == share => {
-                complete.push(Complete {
-                    hash,
-                    paper: p,
-                    pieces: group.pieces,
-                })
-            }
-            _ => problems.push(format!(
-                "QR chunks for paper {paper_name} do not contain a valid paper share"
-            )),
-        }
-    }
-    let complete_shares = complete.len();
+    let progress = assembler.progress();
     Ok(Scan {
         complete,
-        waiting,
+        waiting: assembler.waiting(),
         problems,
-        discovered_shares,
-        complete_shares,
-        loaded_pieces,
-        total_pieces,
+        discovered_shares: progress.discovered_shares,
+        complete_shares: progress.complete_shares,
+        loaded_pieces: progress.loaded_pieces,
+        total_pieces: progress.total_pieces,
     })
 }
 
@@ -289,15 +313,6 @@ fn is_image(path: &Path) -> bool {
         )
     })
 }
-pub fn document_hash(bytes: &[u8]) -> Result<String, Box<dyn Error>> {
-    Ok(
-        openssl::hash::hash(openssl::hash::MessageDigest::sha256(), bytes)?
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn rqrr_reports_missing_numbered_chunks() {
+    fn zbar_reports_missing_numbered_chunks() {
         let dir = std::env::temp_dir().join(format!("pkiboo-qr-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir(&dir).unwrap();
@@ -406,7 +421,7 @@ mod tests {
             data: data.to_vec(),
         };
         write_qr(&dir.join("page.png"), &encode_qr_segment(&segment).unwrap());
-        let scan = scan_directory(&dir).unwrap();
+        let scan = scan_directory(&dir, &mut ShareAssembler::default()).unwrap();
         assert!(scan.complete.is_empty());
         assert!(scan.waiting.join(" ").contains("chunks 2"));
         assert_eq!(scan.discovered_shares, 1);
@@ -424,7 +439,7 @@ mod tests {
         image::GrayImage::from_pixel(200, 200, image::Luma([255]))
             .save(dir.join("blank.png"))
             .unwrap();
-        let scan = scan_directory(&dir).unwrap();
+        let scan = scan_directory(&dir, &mut ShareAssembler::default()).unwrap();
         assert!(
             scan.problems
                 .iter()
@@ -446,7 +461,7 @@ mod tests {
         let expected = paper_share("one-two-three-four-five-six", shares[0].clone());
         write_paper_qrs(&directory, &expected);
 
-        let scan = scan_directory(&directory).unwrap();
+        let scan = scan_directory(&directory, &mut ShareAssembler::default()).unwrap();
         assert!(scan.problems.is_empty(), "{:?}", scan.problems);
         assert!(scan.waiting.is_empty(), "{:?}", scan.waiting);
         assert_eq!(scan.complete.len(), 1);
@@ -479,7 +494,7 @@ mod tests {
             write_paper_qrs(&directory, &paper);
         }
 
-        let scan = scan_directory(&directory).unwrap();
+        let scan = scan_directory(&directory, &mut ShareAssembler::default()).unwrap();
         assert!(scan.problems.is_empty(), "{:?}", scan.problems);
         assert!(scan.waiting.is_empty(), "{:?}", scan.waiting);
         assert_eq!(scan.complete.len(), 3);
